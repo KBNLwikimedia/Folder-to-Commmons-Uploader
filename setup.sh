@@ -1,9 +1,9 @@
 #!/bin/bash
-# Setup script for MacOS-to-Commons-Uploader
+# Setup script for Folder-to-Commons-Uploader (MacOS)
 
 set -e
 
-echo "Setting up MacOS-to-Commons-Uploader..."
+echo "Setting up Folder-to-Commons-Uploader..."
 echo ""
 
 # Create virtual environment

@@ -1,16 +1,19 @@
 {
-  "watch_folder": "./watch",
+  "watch_folder": "./files-to-be-uploaded",
   "processed_files_db": "./data/processed_files.json",
   "own_work": true,
   "copyright": "CC-BY-SA-4.0",
-  "author": "@Daanvr",
+  "author": "[[User:OlafJanssen|OlafJanssen]]",
   "default_categories": [
     "Files uploaded with Folder-to-Commons-Uploader",
-    "Files uploaded by User:Daanvr"
+    "Photographs by Olaf Janssen"
   ],
-  "source": "Own work",
+  "source": "{{own}}",
   "enable_duplicate_check": true,
-  "check_scaled_variants": false,
+  "check_scaled_variants": true,
   "fuzzy_threshold": 10,
-  "block_duplicate_uploads": true
+  "block_duplicate_uploads": true,
+  "file_ready_min_stable_secs": 1.0,
+  "file_ready_max_wait_secs": 6.0,
+  "file_ready_poll_interval": 0.5
 }

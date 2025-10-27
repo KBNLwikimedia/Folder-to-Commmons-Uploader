@@ -8,7 +8,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-MacOS-to-Commons-Uploader is a platform-agnostic Python tool (supporting both macOS and Windows) that monitors a folder for new files and automatically uploads them to Wikimedia Commons with appropriate metadata.
+Folder-to-Commons-Uploader is a platform-agnostic Python tool (supporting both macOS and Windows) that monitors a folder for new files and automatically uploads them to Wikimedia Commons with appropriate metadata.
 
 ### Core Functionality
 

@@ -1,168 +1,170 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8"/>
-  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-  <title>{{ file.name }} - Details</title>
+  <meta charset="utf-8" />
+  <title>Photo details</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
   <style>
-    *{margin:0;padding:0;box-sizing:border-box}
-    body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Oxygen,Ubuntu,Cantarell,sans-serif;background:#f5f5f5;color:#333}
-    .hero{position:relative;background:#000}
-    .hero img{width:100%;height:auto;display:block}
-    .nav{position:absolute;top:1rem;left:1rem;right:1rem;display:flex;justify-content:space-between}
-    .nav a{color:#fff;text-decoration:none;background:rgba(0,0,0,.35);padding:.45rem .75rem;border-radius:8px}
-    .title{position:absolute;left:1rem;bottom:1rem;color:#fff;font-size:1.75rem;text-shadow:0 2px 8px rgba(0,0,0,.5)}
-    .container{max-width:1100px;margin:1.25rem auto;padding:0 1rem}
-    .grid{display:grid;grid-template-columns: 1fr 1fr; gap:1rem}
-    @media (max-width: 900px){ .grid{grid-template-columns: 1fr} }
-    .card{background:#fff;border-radius:12px;box-shadow:0 2px 10px rgba(0,0,0,.08);padding:1rem}
-    .row{display:flex;justify-content:space-between;margin:.35rem 0}
-    .label{color:#666;font-weight:600}
-    .badge{display:inline-block;padding:.2rem .55rem;border-radius:999px;font-size:.8rem;color:#fff}
-    .badge.ok{background:#2e7d32}.badge.pending{background:#757575}.badge.dup{background:#d32f2f}.badge.warn{background:#ef6c00}
-    .mono{font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; background:#f3f4f6; padding:.2rem .35rem; border-radius:4px}
-    .upload-panel { margin-top:.5rem; background:#f9fafc; border:1px solid #e6e8f2; border-radius:10px; padding:.75rem; }
-    .upload-row { display:flex; flex-direction:column; gap:.35rem; margin:.35rem 0; }
-    .upload-row input[type="text"] { padding:.5rem .6rem; border:2px solid #e5e7eb; border-radius:8px; font-size:.95rem; }
-    .btn { border:none; padding:.55rem .9rem; border-radius:8px; font-weight:600; cursor:pointer; }
-    .btn-primary { background:#4a56e2; color:#fff; }
-    .btn-primary[disabled] { background:#c5c9ff; cursor:not-allowed; }
-    .hint { font-size:.85rem; color:#666; }
-    .status { font-size:.9rem; }
-    .status.ok { color:#2e7d32; }
-    .status.err { color:#d32f2f; }
+    body { font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; background:#f6f7f9; margin:0; }
+    header { background:#fff; border-bottom:1px solid #e5e7eb; padding:12px 16px; }
+    .wrap { max-width:1100px; margin:0 auto; padding:16px; }
+    .grid { display:grid; grid-template-columns: 1.25fr 1fr; gap:20px; }
+    @media (max-width: 1000px) { .grid { grid-template-columns: 1fr; } }
+    .panel { background:#fff; border-radius:12px; padding:16px; box-shadow:0 1px 3px rgba(0,0,0,.06); }
+    .title { font-size:20px; font-weight:700; margin:0 0 8px; color:#111827; }
+    .muted { color:#6b7280; }
+    .meta { display:grid; grid-template-columns: 160px 1fr; gap:8px 12px; font-size:14px; }
+    .label { color:#6b7280; }
+    img.main { width:100%; height:auto; border-radius:10px; }
+    .btn { display:inline-block; border:1px solid #d1d5db; background:#fff; padding:8px 12px; border-radius:10px; font-weight:600; cursor:pointer; text-decoration:none; }
+    .btn.primary { background:#2563eb; border-color:#2563eb; color:#fff; }
+    input[type="text"] { width:100%; padding:8px 10px; border:1px solid #d1d5db; border-radius:8px; }
+    .chip { background:#e5e7eb; border-radius:999px; padding:3px 8px; font-size:12px; display:inline-block; margin:0 6px 6px 0; }
+    code { background:#f3f4f6; padding:2px 6px; border-radius:6px; }
   </style>
 </head>
 <body>
-  <div class="hero">
-    <img src="{{ file.urls.image }}" alt="{{ file.name }}">
-    <div class="nav">
-      <a href="/">← Back</a>
-      <a href="/settings">⚙ Settings</a>
+  <header>
+    <div class="wrap">
+      <a class="btn" href="{{ url_for('index') }}">← Back</a>
     </div>
-    <div class="title">{{ file.name }}</div>
-  </div>
+  </header>
 
-  <div class="container">
+  <main class="wrap">
     <div class="grid">
-      <div class="card">
-        <h3>File Info</h3>
-        <div class="row"><span class="label">Size</span><span>{{ "%.2f"|format(file.size_mb) }} MB</span></div>
-        <div class="row"><span class="label">Created</span><span>{{ file.created }}</span></div>
-        <div class="row"><span class="label">Modified</span><span>{{ file.modified }}</span></div>
-        <div class="row"><span class="label">Path</span><span class="mono">{{ file.path }}</span></div>
+      <!-- LEFT: Local file — all local attributes here -->
+      <div class="panel">
+        <h2 class="title">{{ file.name }}</h2>
+        <img class="main" src="{{ file.urls.image }}" alt="">
+        <div style="margin-top:14px" class="meta">
+          <div class="label">File name</div><div>{{ file.name }}</div>
+          <div class="label">Local subfolder</div><div>{{ file.upload_suggestion.category_slug }}</div>
+          <div class="label">Path</div><div class="muted">{{ file.path }}</div>
+          <div class="label">Size</div><div>{{ "%.2f"|format(file.size_mb) }} MB</div>
+
+          <!-- EXIF-first Created; fallback to filesystem -->
+          <div class="label">Created</div>
+          <div>
+            {% if file.created_exif %}
+              {{ file.created_exif }}
+            {% else %}
+              {{ file.created }}
+            {% endif %}
+          </div>
+
+          <div class="label">Dimensions</div>
+          <div>
+            {% if file.dimensions.width and file.dimensions.height %}
+              {{ file.dimensions.width }} × {{ file.dimensions.height }} px
+            {% else %}—{% endif %}
+          </div>
+
+          <div class="label">Local SHA-1</div><div><code>{{ file.sha1_local or '—' }}</code></div>
+
+          {% if file.remote_primary and file.remote_primary.sha1_hex and file.status_key in ['duplicate','nameexists','scaled'] %}
+            <div class="label">Remote SHA-1</div>
+            <div><code>{{ file.remote_primary.sha1_hex }}</code></div>
+          {% endif %}
+        </div>
       </div>
 
-      <div class="card">
-        <h3>Commons Check</h3>
-        <div class="row">
-          <span class="label">Status</span>
-          <span>
-            {% if file.commons_check_status == 'NOT_ON_COMMONS' %}
-              <span class="badge ok">✓ Safe to upload</span>
-            {% elif file.commons_check_status == 'EXACT_MATCH' %}
-              <span class="badge dup">Duplicate</span>
-            {% elif file.commons_check_status == 'POSSIBLE_SCALED_VARIANT' %}
-              <span class="badge warn">Variant?</span>
-            {% elif file.commons_check_status == 'EXISTS_DIFFERENT_CONTENT' %}
-              <span class="badge warn">Name conflict</span>
-            {% elif file.commons_check_status == 'PENDING' %}
-              <span class="badge pending">Pending</span>
+      <!-- RIGHT: Commons info + Suggested fields + Upload -->
+      <div class="panel">
+        <h3 class="title">Wikimedia Commons</h3>
+
+        <div class="meta" style="margin-top:6px">
+          <div class="label">Status</div>
+          <div>
+            {% if file.status_key in ['checking'] %}
+              Checking on Commons in progress
             {% else %}
-              <span class="badge pending">{{ file.commons_check_status }}</span>
+              {{ file.commons_check_status }}
             {% endif %}
-          </span>
+          </div>
+
+          {% if file.remote_primary %}
+            <div class="label">Commons file</div>
+            <div><a href="{{ file.remote_primary.url }}" target="_blank">{{ file.remote_primary.title }}</a></div>
+
+            <div class="label">Remote SHA-1</div>
+            <div><code>{{ file.remote_primary.sha1_hex or file.remote_primary.sha1 or file.remote_primary.sha1_base36 or '—' }}</code></div>
+          {% endif %}
         </div>
-        {% if file.sha1_local %}
-        <div class="row"><span class="label">Local SHA-1</span><span class="mono">{{ file.sha1_local }}</span></div>
+
+        {% if file.status_key == 'safe' %}
+          <div style="margin-top:16px">
+            <div class="label" style="margin-bottom:6px">Suggested filename</div>
+            <input id="fn" type="text" value="{{ file.upload_suggestion.suggested_filename }}">
+
+            <div class="label" style="margin:14px 0 6px">Suggested category</div>
+            <input id="cat" type="text" value="{{ file.upload_suggestion.category_slug }}" placeholder="Binnenhofrenovatie">
+            <div class="muted" style="margin-top:6px">Used when you click “Upload to Commons”.</div>
+
+            {% if upload_enabled %}
+              <div style="margin-top:14px">
+                <button class="btn primary" onclick="uploadNow()">Upload to Commons</button>
+              </div>
+            {% else %}
+              <div class="muted" style="margin-top:14px">
+                Upload disabled. Add credentials to <code>.env</code> and restart.
+              </div>
+            {% endif %}
+          </div>
         {% endif %}
 
-        {% if file.commons_matches and file.commons_matches|length %}
-          <div style="margin-top:.5rem;">
-            <div class="label" style="margin-bottom:.35rem;">Matches:</div>
-            <ul style="padding-left:1rem;">
-              {% for m in file.commons_matches %}
-                <li><a href="{{ m.url }}" target="_blank">{{ m.title }}</a></li>
+        <div style="margin-top:16px">
+          <div class="label" style="margin-bottom:6px">Categories on Commons</div>
+          {% if remote_categories and remote_categories|length > 0 %}
+            <div>
+              {% for c in remote_categories %}
+                <a class="chip" href="{{ c.url }}" target="_blank">{{ c.title }}</a>
               {% endfor %}
-            </ul>
+            </div>
+          {% else %}
+            <div class="muted">No categories found (or no exact match).</div>
+          {% endif %}
+        </div>
+
+        {% if exif and exif|length > 0 %}
+          <div style="margin-top:16px">
+            <div class="label" style="margin-bottom:6px">EXIF (selected)</div>
+            <div class="meta">
+              {% for k, v in exif.items() %}
+                <div class="label">{{ k }}</div><div>{{ v }}</div>
+              {% endfor %}
+            </div>
           </div>
         {% endif %}
       </div>
     </div>
-
-    {% if file.commons_check_status == "NOT_ON_COMMONS" %}
-    <div class="card" style="margin-top:1rem;">
-      <h3>Upload to Wikimedia Commons</h3>
-      {% if not upload_enabled %}
-        <p class="hint">🔒 Upload disabled. Add <code>COMMONS_USERNAME</code> and <code>COMMONS_PASSWORD</code> to your <code>.env</code>, then restart.</p>
-      {% endif %}
-
-      <div class="upload-panel">
-        <div class="upload-row">
-          <label>Commons filename</label>
-          <input id="target" type="text" value="{{ file.upload_suggestion.suggested_filename }}" {{ 'disabled' if not upload_enabled else '' }}>
-        </div>
-        <div class="upload-row">
-          <label>Category</label>
-          <input id="cat" type="text" value="{{ file.upload_suggestion.category_slug }}" {{ 'disabled' if not upload_enabled else '' }}>
-        </div>
-        <div class="upload-row" style="display:flex;align-items:center;gap:.5rem;flex-wrap:wrap;">
-          <button type="button" id="btn" class="btn btn-primary" {{ 'disabled' if not upload_enabled else '' }}>⬆️ Upload</button>
-          <span id="st" class="status"></span>
-        </div>
-        <p class="hint" style="margin-top:.35rem;">You can edit the filename before uploading.</p>
-      </div>
-    </div>
-    {% endif %}
-  </div>
+  </main>
 
   <script>
-  async function doUpload(localPath, target, category_slug, btn, st) {
-    btn.disabled = true;
-    st.textContent = 'Uploading…';
-    st.className = 'status';
-    try {
-      const resp = await fetch('{{ url_for("api_upload") }}', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ filename: localPath, target, category_slug })
-      });
-      const ct = resp.headers.get('content-type') || '';
-      const data = ct.includes('application/json') ? await resp.json() : { ok:false, error:'Non-JSON response', status:resp.status };
-      if (!resp.ok || !data.ok) {
-        st.textContent = 'Upload failed';
-        st.className = 'status err';
-        console.error('Upload error', data);
-        alert('Upload failed: ' + (data.error ? JSON.stringify(data.error) : resp.statusText));
-        btn.disabled = false;
-        return;
+    async function uploadNow() {
+      const target = document.getElementById('fn').value.trim();
+      const cat = document.getElementById('cat').value.trim();
+      if (!target) { alert('Please enter a Commons filename'); return; }
+      try {
+        const resp = await fetch('{{ url_for("api_upload") }}', {
+          method: 'POST',
+          headers: {'Content-Type':'application/json'},
+          body: JSON.stringify({
+            filename: '{{ file.relative_path|e }}',
+            target: target,
+            category_slug: cat
+          })
+        });
+        const data = await resp.json();
+        if (!resp.ok || !data.ok) {
+          alert('Upload failed: ' + JSON.stringify(data.error || data));
+        } else {
+          alert('Uploaded ✓\n' + (data.title || '') + '\n' + (data.url || ''));
+          location.href = '{{ url_for("index") }}';
+        }
+      } catch (e) {
+        alert('Upload failed: ' + e);
       }
-      st.textContent = 'Uploaded ✓';
-      st.className = 'status ok';
-      if (data.url) window.open(data.url, '_blank');
-      setTimeout(() => location.reload(), 600);
-    } catch (e) {
-      st.textContent = 'Upload error';
-      st.className = 'status err';
-      console.error('Upload exception', e);
-      alert('Upload error: ' + e);
-      btn.disabled = false;
     }
-  }
-
-  document.addEventListener('DOMContentLoaded', () => {
-    const btn = document.getElementById('btn');
-    if (!btn) return;
-    btn.addEventListener('click', () => {
-      const target = (document.getElementById('target')?.value || '').trim();
-      const category_slug = (document.getElementById('cat')?.value || '').trim();
-      if (!target) { alert('Please enter a target filename.'); return; }
-      // Local path is embedded by the server into the URL param for this page; reuse it:
-      const localPath = {{ file.path|tojson }};
-      const st = document.getElementById('st');
-      doUpload(localPath, target, category_slug, btn, st);
-    }, { passive: true });
-  });
   </script>
 </body>
 </html>

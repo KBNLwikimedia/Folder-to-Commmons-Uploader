@@ -1,202 +1,241 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-  <title>Folder-to-Commons-Uploader - File Monitor</title>
+  <meta charset="utf-8" />
+  <title>Folder → Commons Uploader</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
   <style>
-    * { margin:0; padding:0; box-sizing:border-box; }
-    body { font-family: -apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Oxygen,Ubuntu,Cantarell,sans-serif; background:#f5f5f5; color:#333; }
-    .header { background:linear-gradient(135deg,#667eea 0%, #764ba2 100%); color:#fff; padding:2rem; position:relative; box-shadow:0 2px 10px rgba(0,0,0,0.1); }
-    .header h1 { font-size:2rem; margin-bottom:.25rem; }
-    .header p { opacity:.9; }
-    .settings-link { position:absolute; right:2rem; top:2rem; text-decoration:none; color:#fff; background:rgba(255,255,255,0.18); padding:.5rem 1rem; border-radius:8px; }
-    .container { max-width:1200px; margin:2rem auto; padding:0 1rem; }
-    .files-grid { display:grid; grid-template-columns: repeat(auto-fill,minmax(320px,1fr)); gap:1.25rem; }
-    .file-card { background:#fff; border-radius:12px; overflow:hidden; box-shadow:0 2px 10px rgba(0,0,0,.08); }
-    .file-card__thumb { width:100%; height:200px; object-fit:cover; background:#eee; display:block; }
-    .file-card__body { padding:1rem; }
-    .file-name { font-weight:700; color:#4a56e2; margin-bottom:.35rem; word-break: break-word; }
-    .muted { color:#666; font-size:.9rem; }
-    .row { display:flex; justify-content:space-between; gap:1rem; margin:.25rem 0; }
-    .badge { display:inline-block; padding:.2rem .5rem; border-radius:999px; font-size:.8rem; color:#fff; }
-    .badge.ok { background:#2e7d32; }
-    .badge.pending { background:#757575; }
-    .badge.dup { background:#d32f2f; }
-    .badge.warn { background:#ef6c00; }
+    :root {
+      --bg:#f6f7f9; --panel:#fff; --muted:#6b7280; --ink:#111827; --br:#e5e7eb;
+      --pill-safe:#10b981; --pill-dupe:#ef4444; --pill-name:#f59e0b; --pill-check:#6b7280; --pill-err:#ef4444; --pill-scaled:#8b5cf6; --pill-up:#2563eb;
+    }
+    body { margin:0; font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; background:var(--bg); color:var(--ink); }
+    header { background:#fff; border-bottom:1px solid var(--br); }
+    .wrap { max-width:1200px; margin:0 auto; padding:12px 16px; }
+    h1 { font-size:20px; margin:0; }
+    .controls { display:flex; flex-wrap:wrap; gap:10px; align-items:center; margin-top:10px; }
+    .ctrl { display:flex; align-items:center; gap:6px; }
+    input[type="text"], select {
+      border:1px solid var(--br); border-radius:10px; padding:8px 10px; background:#fff;
+    }
+    .btn { display:inline-flex; align-items:center; gap:6px; border:1px solid var(--br); background:#fff; padding:8px 12px; border-radius:10px; font-weight:600; cursor:pointer; text-decoration:none; }
+    .btn.primary { background:#2563eb; border-color:#2563eb; color:#fff; }
+    .btn[disabled] { opacity:.5; cursor:not-allowed; }
 
-    .upload-panel { margin-top:.75rem; background:#f9fafc; border:1px solid #e6e8f2; border-radius:10px; padding:.75rem; }
-    .upload-panel h4 { font-size:1rem; margin-bottom:.5rem; color:#4a56e2; }
-    .upload-row { display:flex; flex-direction:column; gap:.35rem; margin:.35rem 0; }
-    .upload-row label { font-weight:600; font-size:.85rem; color:#444; }
-    .upload-row input[type="text"] { padding:.5rem .6rem; border:2px solid #e5e7eb; border-radius:8px; font-size:.95rem; }
-    .upload-actions { display:flex; gap:.5rem; align-items:center; margin-top:.35rem; flex-wrap:wrap; }
-    .btn { border:none; padding:.55rem .9rem; border-radius:8px; font-weight:600; cursor:pointer; }
-    .btn-primary { background:#4a56e2; color:#fff; }
-    .btn-primary[disabled] { background:#c5c9ff; cursor:not-allowed; }
-    .hint { font-size:.85rem; color:#666; }
-    .status { font-size:.9rem; }
-    .status.ok { color:#2e7d32; }
-    .status.err { color:#d32f2f; }
-    .divider { height:1px; background:#efefef; margin:.6rem 0; }
-    .clickable { cursor:pointer; }
+    .grid { display:grid; grid-template-columns: repeat(3, 1fr); gap:16px; margin-top:16px; }
+    @media (max-width: 1100px) { .grid { grid-template-columns: repeat(2, 1fr); } }
+    @media (max-width: 700px) { .grid { grid-template-columns: 1fr; } }
+
+    .card { background:var(--panel); border-radius:12px; box-shadow:0 1px 3px rgba(0,0,0,.06); overflow:hidden; display:flex; flex-direction:column; }
+    .thumb { width:100%; height:210px; object-fit:cover; background:#ddd; }
+    .body { padding:12px; display:flex; flex-direction:column; gap:8px; }
+    .title { font-weight:700; text-decoration:none; color:#1f2937; }
+    .muted { color:var(--muted); }
+    .row { display:grid; grid-template-columns: 120px 1fr; gap:6px 10px; font-size:14px; }
+    .pill { display:inline-flex; align-items:center; gap:6px; font-size:12px; font-weight:700; color:#fff; padding:4px 8px; border-radius:999px; }
+    .safe { background:var(--pill-safe); }
+    .duplicate { background:var(--pill-dupe); }
+    .nameexists { background:var(--pill-name); }
+    .scaled { background:var(--pill-scaled); }
+    .checking { background:var(--pill-check); }
+    .error { background:var(--pill-err); }
+    .uploaded { background:var(--pill-up); }
+
+    .footer { display:flex; justify-content:space-between; align-items:center; margin-top:8px; }
+    .links { display:flex; gap:6px; }
+    .chiplink { color:#2563eb; text-decoration:none; font-weight:600; }
   </style>
 </head>
 <body>
-  <div class="header">
-    <a class="settings-link" href="/settings">⚙️ Settings</a>
-    <h1>Folder-to-Commons-Uploader</h1>
-    <p>Watching your folder and checking Wikimedia Commons duplicates.</p>
-  </div>
+  <header>
+    <div class="wrap">
+      <div style="display:flex; justify-content:space-between; align-items:center; gap:12px;">
+        <h1>Folder → Commons Uploader</h1>
+        <a class="btn" href="{{ url_for('settings_view') }}">Settings</a>
+      </div>
 
-  <div class="container">
-    {% if files and files|length %}
-    <div class="files-grid">
-      {% for file in files %}
-      <div class="file-card">
-        <div class="clickable" onclick="location.href='{{ file.urls.detail }}'">
-          <img class="file-card__thumb" src="{{ file.urls.thumb }}" alt="{{ file.name }}"
-               onerror="this.onerror=null;this.src='{{ file.urls.image }}'">
+      <div class="controls">
+        <div class="ctrl">
+          <label for="q" class="muted">Search</label>
+          <input id="q" type="text" placeholder="filename or suggestion…" oninput="applyFilters()">
         </div>
+        <div class="ctrl">
+          <label for="status" class="muted">Status</label>
+          <select id="status" onchange="applyFilters()">
+            <option value="all">All</option>
+            <option value="safe">Safe to upload</option>
+            <option value="duplicate">Duplicate</option>
+            <option value="nameexists">Name exists (diff content)</option>
+            <option value="scaled">Scaled variant</option>
+            <option value="checking">Checking…</option>
+            <option value="error">Error</option>
+            <option value="uploaded">Uploaded</option>
+          </select>
+        </div>
+        <div class="ctrl">
+          <label class="muted"><input type="checkbox" id="autorefresh" onchange="toggleAutoRefresh(this)"> Auto-refresh</label>
+        </div>
+        <div class="ctrl">
+          <span class="muted">Visible: <span id="visibleCount">0</span> / {{ total_files }}</span>
+        </div>
+        {% if upload_enabled %}
+        <div class="ctrl" id="bulkBox" style="display:none;">
+          <button class="btn primary" onclick="bulkUpload()">Bulk upload all visible “Safe to upload”</button>
+        </div>
+        {% endif %}
+      </div>
+    </div>
+  </header>
 
-        <div class="file-card__body">
-          <div class="file-name clickable" onclick="location.href='{{ file.urls.detail }}'">{{ file.name }}</div>
-          <div class="row"><span class="muted">Size</span><span>{{ "%.2f"|format(file.size_mb) }} MB</span></div>
-          <div class="row"><span class="muted">Created</span><span>{{ file.created }}</span></div>
+  <main class="wrap">
+    {% if files|length == 0 %}
+      <p class="muted">No files yet. Drop JPEGs in <code>{{ settings.watch_folder }}</code> and keep this page open.</p>
+    {% endif %}
 
-          {% if file.commons_check_status %}
-            <div class="row" style="align-items:center;">
-              <span class="muted">Commons</span>
-              {% if file.commons_check_status == "NOT_ON_COMMONS" %}
-                <span class="badge ok">✓ Safe to upload</span>
-              {% elif file.commons_check_status == "EXACT_MATCH" %}
-                <span class="badge dup">Duplicate</span>
-              {% elif file.commons_check_status == "POSSIBLE_SCALED_VARIANT" %}
-                <span class="badge warn">Variant?</span>
-              {% elif file.commons_check_status == "EXISTS_DIFFERENT_CONTENT" %}
-                <span class="badge warn">Name conflict</span>
-              {% elif file.commons_check_status == "PENDING" %}
-                <span class="badge pending">Pending</span>
+    <div id="cards" class="grid">
+      {% for f in files %}
+      <div class="card file-card"
+           data-name="{{ f.name|lower }}"
+           data-suggest="{{ f.upload_suggestion.suggested_filename|lower }}"
+           data-status="{{ f.status_key }}">
+        <img class="thumb" src="{{ f.urls.thumb }}" loading="lazy" alt="">
+        <div class="body">
+          <a class="title" href="{{ f.urls.detail }}">{{ f.name }}</a>
+
+          <div class="row">
+            <div class="muted">Size</div><div>{{ "%.2f"|format(f.size_mb) }} MB</div>
+            <div class="muted">Created</div><div>{{ f.created }}</div>
+            <div class="muted">Dimensions</div>
+            <div>
+              {% if f.dimensions.width and f.dimensions.height %}
+                {{ f.dimensions.width }} × {{ f.dimensions.height }} px
+              {% else %}—{% endif %}
+            </div>
+            <div class="muted">Commons</div>
+            <div>
+              {% set key = f.status_key %}
+              {% if key == 'safe' %}
+                <span class="pill safe">Safe to upload</span>
+              {% elif key == 'duplicate' %}
+                <span class="pill duplicate">Duplicate</span>
+              {% elif key == 'nameexists' %}
+                <span class="pill nameexists">Name exists</span>
+              {% elif key == 'scaled' %}
+                <span class="pill scaled">Scaled variant</span>
+              {% elif key == 'uploaded' %}
+                <span class="pill uploaded">Uploaded</span>
+              {% elif key == 'checking' %}
+                <span class="pill checking">Checking on Commons in progress</span>
               {% else %}
-                <span class="badge pending">{{ file.commons_check_status }}</span>
-              {% endif %}
-            </div>
-          {% endif %}
-
-          {% if file.commons_check_status == "NOT_ON_COMMONS" %}
-            <div class="upload-panel">
-              <h4>Upload to Wikimedia Commons</h4>
-
-              {% if not upload_enabled %}
-                <div class="hint">🔒 Upload disabled. Add <code>COMMONS_USERNAME</code> and <code>COMMONS_PASSWORD</code> to your <code>.env</code>, then restart.</div>
+                <span class="pill error">Error</span>
               {% endif %}
 
-              <div class="upload-row">
-                <label for="target-{{ loop.index }}">Commons filename</label>
-                <input id="target-{{ loop.index }}" type="text"
-                       value="{{ file.upload_suggestion.suggested_filename }}"
-                       {{ 'disabled' if not upload_enabled else '' }}>
-              </div>
-
-              <div class="upload-row">
-                <label for="cat-{{ loop.index }}">Category</label>
-                <input id="cat-{{ loop.index }}" type="text"
-                       value="{{ file.upload_suggestion.category_slug }}"
-                       {{ 'disabled' if not upload_enabled else '' }}>
-              </div>
-
-              <div class="upload-actions">
-                <button
-                  type="button"
-                  id="btn-{{ loop.index }}"
-                  class="btn btn-primary"
-                  data-upload
-                  data-path="{{ file.path }}"
-                  data-target-id="target-{{ loop.index }}"
-                  data-cat-id="cat-{{ loop.index }}"
-                  data-status-id="st-{{ loop.index }}"
-                  {{ 'disabled' if not upload_enabled else '' }}
-                >⬆️ Upload</button>
-                <span id="st-{{ loop.index }}" class="status"></span>
-                <span class="hint">You can edit the filename before uploading.</span>
-              </div>
-              <div class="divider"></div>
-              <div class="hint">Opens the file page with initial description and categories.</div>
+              {% if f.remote_primary and key in ['duplicate','nameexists','scaled'] %}
+                <div class="muted" style="margin-top:4px">
+                  Commons file: <a class="chiplink" href="{{ f.remote_primary.url }}" target="_blank">{{ f.remote_primary.title }}</a>
+                </div>
+              {% endif %}
             </div>
-          {% endif %}
+
+            {% if key == 'duplicate' or key == 'nameexists' or key == 'scaled' %}
+              <div class="muted">Local filename</div><div>{{ f.name }}</div>
+              <div class="muted">Local subfolder</div><div>{{ f.upload_suggestion.category_slug }}</div>
+            {% else %}
+              <div class="muted">Suggested filename</div><div>{{ f.upload_suggestion.suggested_filename }}</div>
+              <div class="muted">Suggested category</div><div>{{ f.upload_suggestion.category_slug or '—' }}</div>
+            {% endif %}
+          </div>
+
+          <div class="footer">
+            <div class="muted">SHA-1: {{ (f.sha1_local or '')[:10] ~ ('…' if f.sha1_local) }}</div>
+            <div class="links">
+              <a class="btn" href="{{ f.urls.detail }}">More details</a>
+            </div>
+          </div>
         </div>
       </div>
       {% endfor %}
     </div>
-    {% else %}
-      <p>No files detected yet. Drop JPG/JPEG files into the watch folder.</p>
-    {% endif %}
-  </div>
+  </main>
 
   <script>
-  // Attach one handler to all Upload buttons. Avoid brittle inline onclicks.
-  function bindUploadHandlers() {
-    const buttons = document.querySelectorAll('button[data-upload]');
-    buttons.forEach(btn => {
-      btn.addEventListener('click', async (ev) => {
-        const statusId = btn.dataset.statusId;
-        const st = document.getElementById(statusId);
-        const targetInput = document.getElementById(btn.dataset.targetId);
-        const catInput = document.getElementById(btn.dataset.catId);
-        const localPath = btn.dataset.path; // plain attribute keeps backslashes as-is
-        const target = (targetInput?.value || '').trim();
-        const category_slug = (catInput?.value || '').trim();
+    const statusSel = document.getElementById('status');
+    const qInput = document.getElementById('q');
+    const cards = Array.from(document.querySelectorAll('.file-card'));
+    const visibleCount = document.getElementById('visibleCount');
+    const bulkBox = document.getElementById('bulkBox');
 
-        if (!target) { alert("Please enter a target filename."); return; }
+    function applyFilters() {
+      const q = qInput.value.trim().toLowerCase();
+      const st = statusSel.value;
 
-        btn.disabled = true;
-        if (st) { st.textContent = "Uploading…"; st.className = "status"; }
+      let shown = 0;
+      cards.forEach(c => {
+        const name = c.dataset.name || '';
+        const suggest = c.dataset.suggest || '';
+        const status = c.dataset.status || 'checking';
 
-        try {
-          const resp = await fetch('{{ url_for("api_upload") }}', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ filename: localPath, target, category_slug })
-          });
-          const ct = resp.headers.get('content-type') || '';
-          const data = ct.includes('application/json') ? await resp.json() : { ok:false, error: 'Non-JSON response', status: resp.status };
+        const matchText = (!q) || name.includes(q) || suggest.includes(q);
+        const matchStatus = (st === 'all') || (status === st);
 
-          if (!resp.ok || !data.ok) {
-            if (st) { st.textContent = "Upload failed"; st.className = "status err"; }
-            console.error('Upload error', data);
-            alert('Upload failed: ' + (data.error ? JSON.stringify(data.error) : resp.statusText));
-            btn.disabled = false;
-            return;
-          }
-          if (st) { st.textContent = "Uploaded ✓"; st.className = "status ok"; }
-          if (data.url) { window.open(data.url, '_blank'); }
-          setTimeout(() => location.reload(), 600);
-        } catch (e) {
-          if (st) { st.textContent = "Upload error"; st.className = "status err"; }
-          console.error('Upload exception', e);
-          alert('Upload error: ' + e);
-          btn.disabled = false;
+        const show = matchText && matchStatus;
+        c.style.display = show ? '' : 'none';
+        if (show) shown++;
+      });
+
+      visibleCount.textContent = shown.toString();
+
+      // Show bulk upload only if Status filter == 'safe' (and there is at least one visible)
+      if (bulkBox) {
+        bulkBox.style.display = (statusSel.value === 'safe' && shown > 0) ? '' : 'none';
+      }
+    }
+
+    // Auto-refresh (every 8s) toggle with persistence
+    const autoChk = document.getElementById('autorefresh');
+    const AUTO_KEY = 'ftc_auto_refresh';
+    let _autoTimer = null;
+
+    function startAuto() {
+      if (_autoTimer) clearInterval(_autoTimer);
+      _autoTimer = setInterval(() => { window.location.reload(); }, 8000);
+    }
+    function stopAuto() {
+      if (_autoTimer) { clearInterval(_autoTimer); _autoTimer = null; }
+    }
+    function toggleAutoRefresh(el) {
+      if (el.checked) {
+        localStorage.setItem(AUTO_KEY, '1');
+        startAuto();
+      } else {
+        localStorage.removeItem(AUTO_KEY);
+        stopAuto();
+      }
+    }
+    // init state
+    if (localStorage.getItem(AUTO_KEY) === '1') {
+      autoChk.checked = true;
+      startAuto();
+    }
+
+    async function bulkUpload() {
+      if (!confirm('Upload all visible “Safe to upload” items now?')) return;
+      try {
+        const r = await fetch('{{ url_for("api_bulk_upload") }}', { method:'POST' });
+        const j = await r.json();
+        if (!r.ok || !j.ok) {
+          alert('Bulk upload failed: ' + JSON.stringify(j.error || j));
+        } else {
+          alert(`Bulk upload done. Uploaded ${j.uploaded}/${j.requested}.`);
+          window.location.reload();
         }
-      }, { passive: true });
-    });
-  }
+      } catch (e) {
+        alert('Bulk upload error: ' + e);
+      }
+    }
 
-  document.addEventListener('DOMContentLoaded', bindUploadHandlers);
-
-  // auto-refresh (so background Commons check results appear)
-  let lastSig = null;
-  function sig(arr) {
-    return (arr||[]).map(f => `${f.path}|${f.commons_check_status}|${f.sha1_local}`).sort().join('::');
-  }
-  setInterval(async () => {
-    try {
-      const r = await fetch('/api/files');
-      const files = await r.json();
-      const s = sig(files);
-      if (lastSig === null) { lastSig = s; return; }
-      if (s !== lastSig) location.reload();
-    } catch {}
-  }, 3000);
+    // First layout
+    applyFilters();
   </script>
 </body>
 </html>

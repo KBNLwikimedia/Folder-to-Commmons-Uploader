@@ -1,897 +1,749 @@
 #!/usr/bin/env python3
 """
-Flask Web UI for MacOS-to-Commons-Uploader
-Displays detected files, their status, and metadata.
+Folder → Commons Uploader - Flask app
 
-What this app does
-------------------
-• Watches a "watch" folder (e.g. watch/Category_Binnenhofrenovatie) for JPG/JPEG.
-• Tracks files in data/processed_files.json.
-• Background "Commons duplicate check" so items don’t stay stuck on PENDING.
-• For files NOT on Commons, suggests a Commons filename:
-    <CategorySlug>_<yyyymmdd-hhmmss><ext>
-  where CategorySlug is the part after "Category_" in the folder name.
-• Upload to Commons via /api/upload using credentials in .env.
-• Routes accept either absolute paths or filenames relative to the watch folder.
+• Lists images from processed_files.json (produced by monitor.py or a similar process)
+• Background checker (optional) updates Commons duplicate status via SHA-1
+• Index page: tiles, filters, “More details”, upload UI for “Safe to upload”
+• Detail page:
+    LEFT  = local-only info (name, subfolder, EXIF-first Created, size, dimensions, local SHA-1)
+    RIGHT = Commons info (status, file link, remote SHA-1, categories) + Suggested filename/category + Upload
 
-Prereqs
--------
-pip install flask pillow watchdog python-dotenv requests urllib3
+Requires:
+    - templates/index.html (existing in your repo)
+    - templates/file_detail.html (included below)
+    - templates/settings.html (existing)
+    - commons_duplicate_checker.py (or lib/commons_duplicate_checker.py)
+
+.env:
+    COMMONS_USERNAME=...
+    COMMONS_PASSWORD=...
+    COMMONS_USER_AGENT=Optional UA string
 """
 
 from __future__ import annotations
 
+import io
 import json
 import os
-import re
-import time
 import threading
+import time
 from datetime import datetime
-from pathlib import Path
-from typing import Optional, Dict, List, Any
+from pathlib import Path, PurePosixPath
+from typing import Any, Dict, List, Optional
 
 from flask import (
     Flask, render_template, jsonify, request, redirect, url_for, flash, send_file
 )
-from PIL import Image
+from PIL import Image, ExifTags
 import requests
-from requests.adapters import HTTPAdapter
-from urllib3.util.retry import Retry
-from html import unescape
+from dotenv import load_dotenv
 
-CONNECT_TIMEOUT = 25
-READ_TIMEOUT = 240
-API_TIMEOUT = (CONNECT_TIMEOUT, READ_TIMEOUT)
-
-# ---- watchdog: use polling on Windows to be robust ----
-if os.name == "nt":
-    from watchdog.observers.polling import PollingObserver as Observer
-else:
-    from watchdog.observers import Observer
-from watchdog.events import FileSystemEventHandler
-
-# ---- Import Commons duplicate checker (optional) ----
+# ---------- Try to import the checker from either location ----------
 try:
-    from lib.commons_duplicate_checker import check_file_on_commons, build_session as build_checker_session
-except Exception as e:
-    print("Warning: Could not import lib.commons_duplicate_checker. Duplicate checking disabled.")
-    print(f"  Import error: {e}")
-    check_file_on_commons = None  # type: ignore
-    build_checker_session = None  # type: ignore
+    from lib.commons_duplicate_checker import check_file_on_commons, build_session
+except Exception:
+    try:
+        from commons_duplicate_checker import check_file_on_commons, build_session
+    except Exception:
+        check_file_on_commons = None
+        build_session = None
+        print("⚠️  commons_duplicate_checker not found: duplicate checking disabled.")
 
-# ---- dotenv: robust, on-demand loading ----
-from dotenv import load_dotenv, find_dotenv
-
-def get_commons_creds() -> tuple[str, str, str]:
-    """
-    Load .env from the repo root (or nearest parent) every time.
-    Returns (username, password, user_agent).
-    """
-    dotenv_path = find_dotenv(usecwd=True)
-    # You can uncomment the next line to see where it loads from:
-    # print(f".env found: {dotenv_path or '(none)'}")
-    load_dotenv(dotenv_path=dotenv_path, override=False)
-
-    username = os.getenv("COMMONS_USERNAME", "").strip()
-    password = os.getenv("COMMONS_PASSWORD", "").strip()
-    # Optional override for UA
-    user_agent_from_env = (os.getenv("COMMONS_USER_AGENT", "") or "").strip()
-    return username, password, user_agent_from_env
-
-
-COMMONS_API = "https://commons.wikimedia.org/w/api.php"
-DEFAULT_USER_AGENT = "KB Folder-to-Commons Uploader (App UI)"
-TIMEOUT_SECS = 25
-RETRIES_TOTAL = 5
-RETRIES_BACKOFF = 0.6
-
+# ---------- Flask ----------
 app = Flask(__name__)
-app.secret_key = 'dev-secret-key-change-in-production'
+app.secret_key = "dev-secret-key-change-in-production"
 
+# ---------- Constants ----------
+API_TIMEOUT = 30
+CHECK_LOOP_INTERVAL_SEC = 6
+READ_CHUNK = 1024 * 1024
+THUMB_MAX = (300, 300)
+COMMONS_API = "https://commons.wikimedia.org/w/api.php"
 
-# ========================
-# Utilities
-# ========================
-
-def login_with_botpassword(session: requests.Session, username: str, password: str) -> None:
-    """
-    Login using legacy action=login (recommended for BotPasswords).
-    Raises on failure.
-    """
-    print("[UPLOAD] (fallback) Getting login token for action=login…")
-    r = session.get(COMMONS_API, params={
-        "action": "query", "meta": "tokens", "type": "login", "format": "json"
-    }, timeout=API_TIMEOUT)
-    r.raise_for_status()
-    login_token = r.json()["query"]["tokens"]["logintoken"]
-
-    print("[UPLOAD] (fallback) action=login …")
-    r2 = session.post(COMMONS_API, data={
-        "action": "login", "format": "json",
-        "lgname": username, "lgpassword": password, "lgtoken": login_token,
-    }, timeout=API_TIMEOUT)
-    r2.raise_for_status()
-    data2 = r2.json()
-    status = (data2.get("login") or {}).get("result")
-    print(f"[UPLOAD] (fallback) login result = {status}")
-    if status != "Success":
-        raise RuntimeError(f"BotPassword login failed: {json.dumps(data2, ensure_ascii=False)}")
-
-
-def build_requests_session(user_agent: str | None = None) -> requests.Session:
-    s = requests.Session()
-    retry = Retry(
-        total=RETRIES_TOTAL,
-        connect=RETRIES_TOTAL,
-        read=RETRIES_TOTAL,
-        status=RETRIES_TOTAL,
-        status_forcelist=(429, 500, 502, 503, 504),
-        allowed_methods=frozenset({"GET", "POST"}),
-        backoff_factor=RETRIES_BACKOFF,
-        raise_on_status=False,
-    )
-    s.mount("https://", HTTPAdapter(max_retries=retry))
-    ua = (user_agent or DEFAULT_USER_AGENT).strip()
-    s.headers.update({"User-Agent": ua, "Accept": "application/json"})
+# ---------- ENV (upload credentials) ----------
+load_dotenv()
+def _strip_quotes(s: Optional[str]) -> Optional[str]:
+    if s is None:
+        return None
+    s = s.strip()
+    if (s.startswith('"') and s.endswith('"')) or (s.startswith("'") and s.endswith("'")):
+        return s[1:-1]
     return s
 
+COMMONS_USERNAME = _strip_quotes(os.getenv("COMMONS_USERNAME"))
+COMMONS_PASSWORD = _strip_quotes(os.getenv("COMMONS_PASSWORD"))
+COMMONS_USER_AGENT = _strip_quotes(os.getenv("COMMONS_USER_AGENT")) or \
+    "Folder-to-Commons-Uploader/1.0 (contact: unknown)"
+UPLOAD_ENABLED = bool(COMMONS_USERNAME and COMMONS_PASSWORD)
 
-def resolve_ref_to_path(ref: str, settings: dict) -> Path:
-    """
-    Accepts either:
-      - a bare filename like '20240409_173917.jpg' (resolved under watch_folder), or
-      - an absolute path like 'D:\\...\\20240409_173917.jpg' or '/Users/.../file.jpg'.
-    """
-    # Windows absolute path like C:\ or D:\
-    is_win_abs = bool(re.match(r"^[A-Za-z]:[\\/]", ref))
-    p = Path(ref)
-    if p.is_absolute() or is_win_abs:
-        return p
-    return Path(settings['watch_folder']).resolve() / ref
+# ---------- Settings ----------
+DEFAULT_SETTINGS = {
+    "watch_folder": "files-to-be-uploaded",
+    "processed_files_db": "data/processed_files.json",
+    "author": "",
+    "copyright": "",
+    "source": "",
+    "own_work": True,
+    "default_categories": [],
+    "enable_duplicate_check": True,
+    "check_scaled_variants": False,
+    "fuzzy_threshold": 10
+}
 
-
-def slug_from_category_folder(folder_name: str) -> str:
-    """From 'Category_Binnenhofrenovatie' -> 'Binnenhofrenovatie' (safe)."""
-    base = folder_name.strip()
-    m = re.match(r"^Category[_\s]+(.+)$", base, flags=re.IGNORECASE)
-    core = m.group(1) if m else base
-    core = core.replace(" ", "_")
-    core = re.sub(r'[<>:"/\\|?*#]', "_", core)
-    return core
-
-
-TS_PATTERN = re.compile(r"(?P<date>\d{8})[-_](?P<time>\d{6})")  # yyyymmdd-hhmmss / yyyymmdd_hhmmss
-
-def extract_timestamp_token(filename: str) -> Optional[str]:
-    m = TS_PATTERN.search(filename)
-    if not m:
-        return None
-    date = m.group("date")
-    tim = m.group("time")
-    return f"{date}-{tim}"
-
-
-def suggest_commons_filename(local_path: Path, watch_folder: Path) -> str:
-    """
-    Suggested filename: "<CategorySlug>_<yyyymmdd-hhmmss><ext>"
-    If no timestamp found, fall back to "<CategorySlug>_<stem><ext>".
-    """
-    parent = local_path.parent.name
-    slug = slug_from_category_folder(parent)
-    ts = extract_timestamp_token(local_path.name)
-    stem = local_path.stem
-    ext = local_path.suffix.lower()
-    namecore = f"{slug}_{ts}" if ts else f"{slug}_{stem}"
-    namecore = re.sub(r'[<>:"/\\|?*#]', "_", namecore)
-    return f"{namecore}{ext}"
-
-
-def wikitext_from_settings_and_category(settings: Dict[str, Any], category_slug: str) -> str:
-    """Build initial page text and categories."""
-    author = settings.get("author", "")
-    source = settings.get("source", "")
-    own_work = settings.get("own_work", True)
-    default_categories = settings.get("default_categories", []) or []
-
-    lines = [
-        "=={{int:filedesc}}==",
-        "{{Information",
-        "|description={{en|1=Uploaded via KB Folder-to-Commons Uploader}}",
-        "|date=",
-        "|source={{own}}" if own_work else f"|source={source}",
-        f"|author={author}",
-        "}}",
-        "=={{int:license-header}}==",
-        "{{self|cc-by-sa-4.0}}",
-        f"[[Category:{category_slug}]]",
-    ]
-    for c in default_categories:
-        c = str(c).strip()
-        if not c:
-            continue
-        cat_name = c.split(":", 1)[1] if c.lower().startswith("category:") else c
-        lines.append(f"[[Category:{cat_name}]]")
-    return "\n".join(lines) + "\n"
-
-
-def commons_login_and_get_csrf(session: requests.Session, username: str, password: str) -> str:
-    """
-    Try clientlogin first (works for non-2FA accounts).
-    If that fails (e.g., 2FA or wrong flow), fall back to action=login (BotPassword).
-    Returns a CSRF token on success.
-    """
-    # First attempt: clientlogin
+def load_settings() -> Dict[str, Any]:
+    p = Path("settings.json")
+    if not p.exists():
+        p.parent.mkdir(parents=True, exist_ok=True)
+        with p.open("w", encoding="utf-8") as f:
+            json.dump(DEFAULT_SETTINGS, f, indent=2)
+        return DEFAULT_SETTINGS.copy()
     try:
-        print("[UPLOAD] Getting login token (clientlogin)…")
-        r = session.get(COMMONS_API, params={
-            "action": "query", "meta": "tokens", "type": "login", "format": "json"
-        }, timeout=API_TIMEOUT)
-        r.raise_for_status()
-        login_token = r.json()["query"]["tokens"]["logintoken"]
+        with p.open("r", encoding="utf-8") as f:
+            data = json.load(f)
+    except Exception:
+        data = DEFAULT_SETTINGS.copy()
+        with p.open("w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2)
+    for k, v in DEFAULT_SETTINGS.items():
+        data.setdefault(k, v)
+    return data
 
-        print(f"[UPLOAD] clientlogin as {username!r} …")
-        r2 = session.post(COMMONS_API, data={
-            "action": "clientlogin", "format": "json",
-            "username": username, "password": password,
-            "loginreturnurl": "https://commons.wikimedia.org/wiki/Special:BlankPage",
-            "logintoken": login_token,
-        }, timeout=API_TIMEOUT)
-        r2.raise_for_status()
-        data2 = r2.json()
-        status = (data2.get("clientlogin") or {}).get("status")
-        print(f"[UPLOAD] clientlogin status = {status}")
+def save_settings(settings: Dict[str, Any]) -> None:
+    p = Path("settings.json")
+    p.parent.mkdir(parents=True, exist_ok=True)
+    tmp = p.with_suffix(".tmp")
+    with tmp.open("w", encoding="utf-8") as f:
+        json.dump(settings, f, indent=2)
+    tmp.replace(p)
 
-        if status == "PASS":
-            # get CSRF
-            print("[UPLOAD] Getting CSRF token…")
-            r3 = session.get(COMMONS_API, params={
-                "action": "query", "meta": "tokens", "type": "csrf", "format": "json"
-            }, timeout=API_TIMEOUT)
-            r3.raise_for_status()
-            csrf = r3.json()["query"]["tokens"]["csrftoken"]
-            if not csrf or csrf == "+\\":
-                raise RuntimeError("Empty CSRF token")
-            return csrf
-
-        # If clientlogin FAILED (e.g., wrongpassword, 2FA), try BotPassword flow next.
-        print(f"[UPLOAD] clientlogin failed ({status}). Falling back to action=login (BotPassword).")
-
-    except Exception as e:
-        print(f"[UPLOAD] clientlogin exception: {e}. Will try action=login (BotPassword).")
-
-    # Fallback: BotPassword (action=login)
-    login_with_botpassword(session, username, password)
-
-    # After login, fetch CSRF token
-    print("[UPLOAD] (fallback) Getting CSRF token…")
-    r4 = session.get(COMMONS_API, params={
-        "action": "query", "meta": "tokens", "type": "csrf", "format": "json"
-    }, timeout=API_TIMEOUT)
-    r4.raise_for_status()
-    csrf = r4.json()["query"]["tokens"]["csrftoken"]
-    if not csrf or csrf == "+\\":
-        raise RuntimeError("Empty CSRF token after fallback login")
-    return csrf
-
-
-
-
-def upload_to_commons(
-    local_path: Path,
-    target_filename: str,
-    category_slug: str,
-    settings: dict,
-    username: str,
-    password: str,
-    user_agent: str,
-) -> Dict[str, Any]:
-    """Upload file to Commons with initial wikitext that includes Category:<slug>."""
-    if not username or not password:
-        raise RuntimeError("Missing COMMONS_USERNAME/COMMONS_PASSWORD in .env")
-
-    session = build_requests_session(user_agent or DEFAULT_USER_AGENT)
-    csrf = commons_login_and_get_csrf(session, username, password)
-
-    with local_path.open("rb") as f:
-        files = {"file": (target_filename, f, "application/octet-stream")}
-        data = {
-            "action": "upload",
-            "format": "json",
-            "filename": target_filename,          # no 'File:' prefix here
-            "comment": "Upload via KB Folder-to-Commons Uploader",
-            "text": wikitext_from_settings_and_category(settings, category_slug),
-            "token": csrf,
-            "ignorewarnings": "1",
-        }
-        r = session.post(COMMONS_API, data=data, files=files, timeout=TIMEOUT_SECS)
-        r.raise_for_status()
-        resp = r.json()
-
-    if "error" in resp:
-        return {"ok": False, "details": resp["error"]}
-
-    up = resp.get("upload", {})
-    if up.get("result") == "Success":
-        title = up.get("filename") or f"File:{target_filename}"
-        url = f"https://commons.wikimedia.org/wiki/{title.replace(' ', '_')}"
-        return {"ok": True, "title": title, "url": url, "details": up}
-    return {"ok": False, "details": resp}
-
-
-# ========================
-# File tracking / storage
-# ========================
-
+# ---------- FileTracker (robust JSON I/O) ----------
 class FileTracker:
-    """Tracks files and their Commons-check status in a JSON DB."""
-
     def __init__(self, db_path: Path):
-        self.db_path = Path(db_path)
-        self._lock = threading.Lock()
-        self.processed_files: Dict[str, Dict[str, Any]] = self._load()
+        self.db_path = db_path
+        self.lock = threading.Lock()
+        self.processed_files = self._load()
 
     def _load(self) -> Dict[str, Dict[str, Any]]:
-        if self.db_path.exists():
-            with self.db_path.open('r', encoding='utf-8') as f:
-                data = json.load(f)
-            if isinstance(data, list):
-                return {str(p): self._create_file_record(p) for p in data}
-            if isinstance(data, dict):
-                return data
+        if not self.db_path.exists():
+            return {}
+        try:
+            with self.db_path.open("r", encoding="utf-8") as f:
+                text = f.read().strip()
+                if not text:
+                    return {}
+                data = json.loads(text)
+                if isinstance(data, list):
+                    return {str(p): self._create_file_record(p) for p in data}
+                if isinstance(data, dict):
+                    return data
+        except Exception as e:
+            print(f"⚠️  processed_files.json load failed ({e}); continuing with empty DB.")
         return {}
 
-    def _save(self) -> None:
+    def _atomic_save(self) -> None:
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
-        with self.db_path.open('w', encoding='utf-8') as f:
+        tmp = self.db_path.with_suffix(".tmp")
+        with tmp.open("w", encoding="utf-8") as f:
             json.dump(self.processed_files, f, indent=2)
+        tmp.replace(self.db_path)
 
     def _create_file_record(self, file_path: str, **kwargs) -> Dict[str, Any]:
         return {
             "file_path": str(file_path),
-            "detected_at": kwargs.get("detected_at", datetime.now().isoformat()),
+            "detected_at": datetime.utcnow().isoformat() + "Z",
             "sha1_local": kwargs.get("sha1_local", ""),
             "commons_check_status": kwargs.get("commons_check_status", "PENDING"),
             "commons_matches": kwargs.get("commons_matches", []),
             "checked_at": kwargs.get("checked_at", ""),
             "check_details": kwargs.get("check_details", ""),
+            "category": kwargs.get("category", None),
+            "uploaded": kwargs.get("uploaded", False),
         }
-
-    def is_processed(self, file_path: Path) -> bool:
-        with self._lock:
-            return str(file_path) in self.processed_files
-
-    def mark_processed(self, file_path: Path, **kwargs) -> None:
-        file_key = str(file_path)
-        with self._lock:
-            if file_key in self.processed_files:
-                self.processed_files[file_key].update(kwargs)
-            else:
-                self.processed_files[file_key] = self._create_file_record(file_key, **kwargs)
-            self._save()
-
-    def update_commons_check(self, file_path: str | Path, check_result: Dict[str, Any]) -> None:
-        file_key = str(file_path)
-        with self._lock:
-            if file_key not in self.processed_files:
-                self.processed_files[file_key] = self._create_file_record(file_key)
-            rec = self.processed_files[file_key]
-            rec.update({
-                "sha1_local": check_result.get("sha1_local", rec.get("sha1_local", "")),
-                "commons_check_status": check_result.get("status", "ERROR"),
-                "commons_matches": check_result.get("matches", []),
-                "checked_at": check_result.get("checked_at", datetime.now().isoformat()),
-                "check_details": check_result.get("details", rec.get("check_details", "")),
-            })
-            self._save()
-
-    def get_file_record(self, file_path: str | Path) -> Optional[Dict[str, Any]]:
-        return self.processed_files.get(str(file_path))
 
     def get_all_files(self) -> List[Dict[str, Any]]:
-        with self._lock:
+        with self.lock:
             return list(self.processed_files.values())
 
+    def get_record(self, file_path: Path) -> Optional[Dict[str, Any]]:
+        with self.lock:
+            return self.processed_files.get(str(file_path))
 
-# ========================
-# Watchdog handler
-# ========================
+    def update_record(self, file_path: Path, updates: Dict[str, Any]) -> None:
+        with self.lock:
+            key = str(file_path)
+            rec = self.processed_files.get(key)
+            if rec is None:
+                rec = self._create_file_record(key)
+                self.processed_files[key] = rec
+            rec.update(updates)
+            self._atomic_save()
 
-class NewFileHandler(FileSystemEventHandler):
-    """Handles new files arriving in the watch folder."""
+# ---------- Path/URL helpers ----------
+def relref_from_local(local_path: Path, watch_folder: Path) -> str:
+    return local_path.resolve().relative_to(watch_folder.resolve()).as_posix()
 
-    def __init__(self, tracker: FileTracker, watch_folder: Path, settings: Dict[str, Any], commons_session=None):
-        self.tracker = tracker
-        self.watch_folder = Path(watch_folder)
-        self.settings = settings
-        self.commons_session = commons_session
+def local_from_relref(relref: str, watch_folder: Path) -> Path:
+    posix = PurePosixPath(relref)
+    safe = Path(*posix.parts)
+    abs_path = (watch_folder / safe).resolve()
+    if not str(abs_path).startswith(str(watch_folder.resolve())):
+        raise FileNotFoundError("Ref outside watch folder")
+    return abs_path
 
-    def on_created(self, event):
-        if event.is_directory:
-            return
-        file_path = Path(event.src_path)
-        if file_path.suffix.lower() not in ('.jpg', '.jpeg'):
-            return
-        if self.tracker.is_processed(file_path):
-            return
-        print(f"[NEW FILE DETECTED] {file_path.name}")
-        self.tracker.mark_processed(file_path, commons_check_status="PENDING")
-        print("  • Status: Tracked; Commons check scheduled.\n")
-
-
-# ========================
-# Boot helpers
-# ========================
-
-def scan_existing_files(watch_folder: Path, tracker: FileTracker) -> None:
-    watch_folder.mkdir(parents=True, exist_ok=True)
-    print(f"Scanning existing files in: {watch_folder}")
-    existing_count = 0
-    for p in watch_folder.glob('*'):
-        if p.is_file() and p.suffix.lower() in ('.jpg', '.jpeg'):
-            if not tracker.is_processed(p):
-                tracker.mark_processed(p, commons_check_status="PENDING")
-                existing_count += 1
-    if existing_count:
-        print(f"Marked {existing_count} existing file(s) as pending for Commons check.\n")
-
-
-def commons_checker_loop(tracker: FileTracker, settings: Dict[str, Any], commons_session) -> None:
-    enabled = settings.get('enable_duplicate_check', False)
-    if not enabled or check_file_on_commons is None:
-        # convert PENDING -> DISABLED so UI isn't stuck
-        for rec in tracker.get_all_files():
-            if rec.get("commons_check_status", "PENDING") == "PENDING":
-                tracker.update_commons_check(
-                    rec["file_path"],
-                    {
-                        "status": "DISABLED",
-                        "details": "Duplicate checking disabled or checker module not available.",
-                        "sha1_local": rec.get("sha1_local", ""),
-                        "checked_at": datetime.now().isoformat()
-                    }
-                )
-        return
-
-    print("Commons checker loop: started.")
-    while True:
-        pendings = [
-            r for r in tracker.get_all_files()
-            if r.get("commons_check_status", "PENDING") in ("PENDING", "IN_PROGRESS")
-        ]
-        for rec in pendings:
-            fp = rec["file_path"]
-            tracker.update_commons_check(fp, {
-                "status": "IN_PROGRESS",
-                "check_details": "Running Commons duplicate check…",
-                "checked_at": datetime.now().isoformat()
-            })
-            try:
-                result = check_file_on_commons(
-                    Path(fp),
-                    session=commons_session,
-                    check_scaled=settings.get('check_scaled_variants', False),
-                    fuzzy_threshold=settings.get('fuzzy_threshold', 10),
-                )
-                tracker.update_commons_check(fp, result)
-            except Exception as e:
-                tracker.update_commons_check(fp, {
-                    "status": "ERROR",
-                    "details": f"{type(e).__name__}: {e}",
-                    "checked_at": datetime.now().isoformat()
-                })
-        time.sleep(2)
-
-
-def start_monitoring() -> None:
-    settings = load_settings()
-    watch_folder = Path(settings['watch_folder']).resolve()
-    db_path = Path(settings['processed_files_db']).resolve()
-
-    print("=" * 60)
-    print("Starting File Monitor")
-    print("=" * 60)
-    print(f"Watch folder: {watch_folder}")
-    print(f"Tracking database: {db_path}")
-
-    if settings.get('enable_duplicate_check', False):
-        print("Duplicate checking: ENABLED")
-        print(f"  • Scaled-variant detection: {'ENABLED' if settings.get('check_scaled_variants', False) else 'DISABLED'}"
-              + (f" (threshold={settings.get('fuzzy_threshold', 10)})" if settings.get('check_scaled_variants', False) else ""))
-    else:
-        print("Duplicate checking: DISABLED")
-    print()
-
-    tracker = FileTracker(db_path)
-
-    commons_session = None
-    if settings.get('enable_duplicate_check', False) and build_checker_session is not None:
-        try:
-            commons_session = build_checker_session()
-            print("Commons API session (checker): ready.")
-        except Exception as e:
-            print(f"Commons checker session init failed: {e}")
-
-    scan_existing_files(watch_folder, tracker)
-
-    event_handler = NewFileHandler(tracker, watch_folder, settings, commons_session)
-    observer = Observer()
-    observer.schedule(event_handler, str(watch_folder), recursive=False)
+def get_category_from_path(local_path: Path, watch_folder: Path) -> str:
     try:
-        observer.start()
-    except Exception as e:
-        print(f"Observer start failed ({e}); falling back to PollingObserver.")
-        from watchdog.observers.polling import PollingObserver
-        observer = PollingObserver()
-        observer.schedule(event_handler, str(watch_folder), recursive=False)
-        observer.start()
+        rel = local_path.resolve().relative_to(watch_folder.resolve())
+    except Exception:
+        return ""
+    parts = rel.parts
+    if len(parts) > 1 and parts[0].lower().startswith("category_"):
+        return parts[0][9:]  # after 'category_'
+    return ""
 
-    threading.Thread(
-        target=commons_checker_loop,
-        args=(tracker, settings, commons_session),
-        daemon=True
-    ).start()
+def suggest_filename(local_path: Path, category_slug: str) -> str:
+    # Simple suggestion: "<Category> <base>.jpg"
+    stem = local_path.stem.replace("_", " ")
+    ext = local_path.suffix.lower() or ".jpg"
+    prefix = category_slug.strip()
+    if prefix:
+        return f"{prefix} {stem}{ext}"
+    return f"{stem}{ext}"
 
-    print("File monitoring started.\n")
-
-
-# ========================
-# Settings + helpers
-# ========================
-
-def load_settings() -> Dict[str, Any]:
-    with open('settings.json', 'r', encoding='utf-8') as f:
-        return json.load(f)
-
-def save_settings(settings: Dict[str, Any]) -> None:
-    with open('settings.json', 'w', encoding='utf-8') as f:
-        json.dump(settings, f, indent=2)
-
-def get_file_info(file_path: str) -> Optional[Dict[str, Any]]:
-    p = Path(file_path)
-    if not p.exists():
-        return None
-    st = p.stat()
-    return {
-        'path': str(p),
-        'name': p.name,
-        'size': st.st_size,
-        'size_mb': round(st.st_size / (1024 * 1024), 2),
-        'created': datetime.fromtimestamp(st.st_ctime).strftime('%Y-%m-%d %H:%M:%S'),
-        'modified': datetime.fromtimestamp(getattr(st, "st_mtime", st.st_mtime)).strftime('%Y-%m-%d %H:%M:%S'),
-        'exists': True,
-        'status': 'Detected'
-    }
-
-
-# ========================
-# Routes (UI + API)
-# ========================
-
-@app.route('/')
-def index():
-    """Main list with suggestions and pre-built URLs attached."""
-    settings = load_settings()
-    tracker = FileTracker(Path(settings['processed_files_db']))
-    records = tracker.get_all_files()
-    watch_folder = Path(settings['watch_folder']).resolve()
-
-    files_info: List[Dict[str, Any]] = []
-    for rec in records:
-        info = get_file_info(rec.get('file_path', ''))
-        if not info:
-            continue
-
-        # add relative path (for convenience in templates)
-        try:
-            if str(info['path']).lower().startswith(str(watch_folder).lower()):
-                info['relative_path'] = os.path.relpath(info['path'], watch_folder)
-            else:
-                info['relative_path'] = info['name']
-        except Exception:
-            info['relative_path'] = info['name']
-
-        # Derive category from parent folder if it starts with Category_
-        parent_name = Path(info['path']).parent.name
-        if parent_name.lower().startswith("category_"):
-            info['category'] = slug_from_category_folder(parent_name)
-
-        # pre-built URLs so templates don't need to know param names
-        info['urls'] = {
-            "detail": url_for('file_detail', ref=info['path']),
-            "thumb": url_for('serve_thumbnail', ref=info['path']),
-            "image": url_for('serve_image', ref=info['path']),
-        }
-
-        status = rec.get('commons_check_status', 'PENDING')
-        info['commons_check_status'] = status
-        info['commons_matches'] = rec.get('commons_matches', [])
-        info['check_details'] = rec.get('check_details', '')
-        info['sha1_local'] = rec.get('sha1_local', '')
-
-        if status == "NOT_ON_COMMONS":
-            local_path = Path(rec['file_path'])
-            suggested = suggest_commons_filename(local_path, watch_folder)
-            cat_slug = slug_from_category_folder(local_path.parent.name)
-            info['upload_suggestion'] = {
-                "suggested_filename": suggested,
-                "category_slug": cat_slug,
-                "post_url": url_for('api_upload')
-            }
-        files_info.append(info)
-
-    files_info.sort(key=lambda x: x['created'], reverse=True)
-
-    # Fresh creds -> enable/disable upload UI
-    u, p, _ua = get_commons_creds()
-    can_upload = bool(u and p)
-
-    return render_template(
-        'index.html',
-        files=files_info,
-        total_files=len(files_info),
-        settings=settings,
-        upload_enabled=can_upload
-    )
-
-
-@app.route('/file/<path:ref>')
-def file_detail(ref: str):
-    """Detail page for one file (accepts filename or absolute path)."""
-    settings = load_settings()
-    p = resolve_ref_to_path(ref, settings)
-
-    info = get_file_info(str(p))
-    if not info:
-        return "File not found", 404
-
-    # Derive category display (optional)
-    parent_name = p.parent.name
-    if parent_name.lower().startswith("category_"):
-        info['category'] = slug_from_category_folder(parent_name)
-
-    tracker = FileTracker(Path(settings['processed_files_db']))
-    rec = tracker.get_file_record(str(p))
-    if rec:
-        status = rec.get('commons_check_status', 'PENDING')
-        info['commons_check_status'] = status
-        info['commons_matches'] = rec.get('commons_matches', [])
-        info['check_details'] = rec.get('check_details', '')
-        info['sha1_local'] = rec.get('sha1_local', '')
-        if status == "NOT_ON_COMMONS":
-            suggested = suggest_commons_filename(p, Path(settings['watch_folder']).resolve())
-            cat_slug = slug_from_category_folder(p.parent.name)
-            info['upload_suggestion'] = {
-                "suggested_filename": suggested,
-                "category_slug": cat_slug,
-                "post_url": url_for('api_upload')
-            }
-
-    # URLs for the detail template
-    info['urls'] = {
-        "thumb": url_for('serve_thumbnail', ref=str(p)),
-        "image": url_for('serve_image', ref=str(p)),
-    }
-
-    # Fresh creds control upload UI
-    u, pword, _ua = get_commons_creds()
-    can_upload = bool(u and pword)
-
-    exif = extract_exif_safe(str(p))
-    return render_template('file_detail.html', file=info, exif=exif, settings=settings, upload_enabled=can_upload)
-
-
-@app.route('/api/files')
-def api_files():
-    """JSON list of tracked files (with suggestions when applicable)."""
-    settings = load_settings()
-    tracker = FileTracker(Path(settings['processed_files_db']))
-    watch_folder = Path(settings['watch_folder']).resolve()
-    out = []
-    for rec in tracker.get_all_files():
-        info = get_file_info(rec.get('file_path', ''))
-        if not info:
-            continue
-        status = rec.get('commons_check_status', 'PENDING')
-        info['commons_check_status'] = status
-        info['commons_matches'] = rec.get('commons_matches', [])
-        info['check_details'] = rec.get('check_details', '')
-        info['sha1_local'] = rec.get('sha1_local', '')
-        if status == "NOT_ON_COMMONS":
-            p = Path(rec['file_path'])
-            info['upload_suggestion'] = {
-                "suggested_filename": suggest_commons_filename(p, watch_folder),
-                "category_slug": slug_from_category_folder(p.parent.name),
-                "post_url": url_for('api_upload')
-            }
-        # include URLs in API too (handy for frontend JS)
-        info['urls'] = {
-            "detail": url_for('file_detail', ref=info['path']),
-            "thumb": url_for('serve_thumbnail', ref=info['path']),
-            "image": url_for('serve_image', ref=info['path']),
-        }
-        # Optional category field for UI/API clients
-        parent_name = Path(info['path']).parent.name
-        if parent_name.lower().startswith("category_"):
-            info['category'] = slug_from_category_folder(parent_name)
-        out.append(info)
-    return jsonify(out)
-
-
-@app.route('/api/file/<path:ref>')
-def api_file_detail(ref: str):
-    """JSON details for a single file (accepts filename or absolute path)."""
-    settings = load_settings()
-    p = resolve_ref_to_path(ref, settings)
-
-    info = get_file_info(str(p))
-    if not info:
-        return jsonify({"error": "File not found"}), 404
-
-    exif = extract_exif_safe(str(p))
-    return jsonify({"file": info, "exif": exif})
-
-
-@app.route('/image/<path:ref>')
-def serve_image(ref: str):
-    """Serve the original image bytes (accepts filename or absolute path)."""
-    settings = load_settings()
-    p = resolve_ref_to_path(ref, settings)
-    if not p.exists() or not p.is_file():
-        return "Image not found", 404
-    return send_file(str(p), mimetype='image/jpeg')
-
-
-@app.route('/thumbnail/<path:ref>')
-def serve_thumbnail(ref: str):
-    """Serve a resized thumbnail (JPEG). Accepts filename or absolute path."""
-    settings = load_settings()
-    p = resolve_ref_to_path(ref, settings)
-    if not p.exists() or not p.is_file():
-        return "Image not found", 404
-
+# ---------- Image helpers ----------
+def image_dimensions(path: Path) -> Dict[str, Optional[int]]:
     try:
-        from io import BytesIO
-        img = Image.open(p)
-        img.thumbnail((300, 300))
-        bio = BytesIO()
-        img.save(bio, 'JPEG', quality=85)
-        bio.seek(0)
-        return send_file(bio, mimetype='image/jpeg')
-    except Exception as e:
-        return str(e), 500
+        with Image.open(path) as im:
+            return {"width": int(im.width), "height": int(im.height)}
+    except Exception:
+        return {"width": None, "height": None}
 
-
-@app.route('/api/suggestion/<path:ref>')
-def api_suggestion(ref: str):
-    """Return JSON suggestion for a single file."""
-    settings = load_settings()
-    p = resolve_ref_to_path(ref, settings)
-    if not p.exists():
-        return jsonify({"error": "file not found"}), 404
-    return jsonify({
-        "suggested_filename": suggest_commons_filename(p, Path(settings['watch_folder']).resolve()),
-        "category_slug": slug_from_category_folder(p.parent.name)
-    })
-
-
-@app.route('/api/upload', methods=['POST'])
-def api_upload():
-    """
-    Upload endpoint.
-    Expects JSON body:
-      {
-        "filename": "local filename under watch folder OR absolute path",
-        "target": "TargetOnCommons.jpg",
-        "category_slug": "Binnenhofrenovatie"   // optional; inferred from folder if missing
-      }
-    """
-    settings = load_settings()
-    data = request.get_json(force=True, silent=True) or {}
-    local_name = data.get("filename", "")
-    target = data.get("target", "")
-    category_slug = data.get("category_slug", "")
-
-    # NEW: de-HTML-escape any windows backslashes etc.
-    local_name = unescape(local_name)
-
-    if not local_name or not target:
-        return jsonify({"ok": False, "error": "Missing 'filename' or 'target'"}), 400
-
-    p = resolve_ref_to_path(local_name, settings)
-    if not p.exists():
-        return jsonify({"ok": False, "error": "Local file not found"}), 404
-
-    if not category_slug:
-        category_slug = slug_from_category_folder(p.parent.name)
-
-    # Load creds fresh each request
-    username, password, user_agent = get_commons_creds()
-
+def read_exif_selected(path: Path) -> Dict[str, Any]:
     try:
-        result = upload_to_commons(p, target, category_slug, settings, username, password, user_agent)
-        if result.get("ok"):
-            tracker = FileTracker(Path(settings['processed_files_db']))
-            tracker.update_commons_check(str(p), {
-                "status": "UPLOADED",
-                "details": "Uploaded via app UI",
-                "checked_at": datetime.now().isoformat(),
-                "matches": [{"title": result.get("title", ""), "url": result.get("url", "")}]
-            })
-            return jsonify({"ok": True, "title": result.get("title"), "url": result.get("url")}), 200
-        else:
-            return jsonify({"ok": False, "error": result.get("details")}), 400
-    except Exception as e:
-        return jsonify({"ok": False, "error": f"{type(e).__name__}: {e}"}), 500
-
-
-@app.route('/settings', methods=['GET', 'POST'])
-def settings_view():
-    """View/update settings.json; includes duplicate check and author/source defaults."""
-    if request.method == 'POST':
-        s = load_settings()
-        s['watch_folder'] = request.form.get('watch_folder', s.get('watch_folder', 'watch'))
-        s['processed_files_db'] = request.form.get('processed_files_db', s.get('processed_files_db', 'data/processed_files.json'))
-        # Duplicate checker options
-        s['enable_duplicate_check'] = request.form.get('enable_duplicate_check') == 'on'
-        s['check_scaled_variants'] = request.form.get('check_scaled_variants') == 'on'
-        try:
-            s['fuzzy_threshold'] = int(request.form.get('fuzzy_threshold', s.get('fuzzy_threshold', 10)))
-        except Exception:
-            s['fuzzy_threshold'] = 10
-        # Metadata defaults
-        s['author'] = request.form.get('author', s.get('author', ''))
-        s['copyright'] = request.form.get('copyright', s.get('copyright', ''))
-        s['source'] = request.form.get('source', s.get('source', ''))
-        s['own_work'] = request.form.get('own_work') == 'on'
-        cats = request.form.get('default_categories', '')
-        s['default_categories'] = [c.strip() for c in cats.split(',') if c.strip()]
-
-        save_settings(s)
-        flash('Settings saved.', 'success')
-        return redirect(url_for('settings_view'))
-
-    return render_template('settings.html', settings=load_settings(), upload_enabled=bool(get_commons_creds()[0] and get_commons_creds()[1]))
-
-
-# ========================
-# Minimal EXIF helper (safe)
-# ========================
-
-def extract_exif_safe(file_path: str) -> Dict[str, Any]:
-    out: Dict[str, Any] = {}
-    try:
-        img = Image.open(file_path)
-        out['Image Size'] = f"{img.width} x {img.height}"
-        out['Format'] = img.format
-        out['Mode'] = img.mode
-        exif = img.getexif()
-        if exif:
-            from PIL.ExifTags import TAGS
-            for tag_id, value in exif.items():
-                tag = TAGS.get(tag_id, str(tag_id))
-                if isinstance(value, bytes):
-                    if len(value) > 100:
-                        continue
+        with Image.open(path) as im:
+            exif = im.getexif()
+            if not exif:
+                return {}
+            rev = {ExifTags.TAGS.get(k, str(k)): v for k, v in exif.items()}
+            def _clean(v):
+                if isinstance(v, bytes):
                     try:
-                        value = value.decode('utf-8', errors='ignore').strip()
+                        t = v.decode("utf-8", "ignore").strip()
+                        return t if t else None
+                    except Exception:
+                        return None
+                if isinstance(v, tuple) and len(v) == 2 and all(isinstance(x, int) for x in v):
+                    if v[1] != 0:
+                        return f"{v[0]}/{v[1]}"
+                return v
+            keys = ["DateTimeOriginal", "DateTime", "DateTimeDigitized",
+                    "FNumber", "ExposureTime", "ISOSpeedRatings", "FocalLength", "Make", "Model"]
+            out = {}
+            for k in keys:
+                if k in rev:
+                    val = _clean(rev[k])
+                    if val:
+                        out[k] = val
+            return out
+    except Exception:
+        return {}
+
+def exif_best_created_string(path: Path) -> Optional[str]:
+    """Return human-friendly created time from EXIF if present; else None."""
+    try:
+        with Image.open(path) as im:
+            ex = im.getexif()
+            if not ex:
+                return None
+            for tag in (36867, 36868, 306):  # DateTimeOriginal, DateTimeDigitized, DateTime
+                v = ex.get(tag)
+                if not v:
+                    continue
+                if isinstance(v, bytes):
+                    try:
+                        v = v.decode("utf-8", "ignore").strip()
                     except Exception:
                         continue
-                out[str(tag)] = value
+                v = str(v).strip()
+                # Normalize "YYYY:MM:DD HH:MM:SS" → "YYYY-MM-DD HH:MM:SS"
+                if len(v) >= 19 and v[4] == ":" and v[7] == ":":
+                    v = f"{v[0:4]}-{v[5:7]}-{v[8:10]} {v[11:19]}"
+                return v
+    except Exception:
+        return None
+    return None
+
+# ---------- Status mapping for UI ----------
+def map_status_key(rec_status: str, uploaded: bool) -> str:
+    s = (rec_status or "").upper()
+    if uploaded:
+        return "uploaded"
+    if s in ("EXACT_MATCH",):
+        return "duplicate"
+    if s in ("POSSIBLE_SCALED_VARIANT",):
+        return "scaled"
+    if s in ("EXISTS_DIFFERENT_CONTENT",):
+        return "nameexists"
+    if s in ("NOT_ON_COMMONS",):
+        return "safe"
+    if s in ("CHECKING", "PENDING", ""):
+        return "checking"
+    if s in ("DISABLED",):
+        return "disabled"
+    if s in ("ERROR",):
+        return "error"
+    return "checking"
+
+def primary_remote_from_matches(matches: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    if not matches:
+        return None
+    m = matches[0]
+    return {
+        "title": m.get("title") or m.get("filetitle") or m.get("name"),
+        "url": m.get("url"),
+        "sha1_hex": m.get("sha1_hex") or m.get("sha1"),
+        "sha1_base36": m.get("sha1_base36"),
+    }
+
+# ---------- Enrich remote info (SHA-1 + categories) ----------
+def fetch_commons_fileinfo_and_categories(title: str) -> tuple[Optional[str], list[dict]]:
+    """
+    Fetch SHA-1 (hex) and non-hidden categories for a Commons file title.
+    Returns (sha1_hex, categories) where categories are dicts with 'title'.
+    """
+    try:
+        r = requests.get(
+            COMMONS_API,
+            params={
+                "action": "query",
+                "format": "json",
+                "formatversion": "2",
+                "redirects": "1",
+                "titles": title,                    # e.g., "File:Example.jpg"
+                "prop": "imageinfo|categories",
+                "iiprop": "sha1",
+                "clshow": "!hidden",
+                "cllimit": "500",
+            },
+            headers={"User-Agent": COMMONS_USER_AGENT},
+            timeout=API_TIMEOUT,
+        )
+        r.raise_for_status()
+        data = r.json()
+        pages = (data.get("query") or {}).get("pages") or []
+        if not pages:
+            return None, []
+        pg = pages[0]
+        sha1_hex = None
+        ii = (pg.get("imageinfo") or [])
+        if ii:
+            sha1_hex = (ii[0] or {}).get("sha1")
+        cats = (pg.get("categories") or [])
+        return sha1_hex, cats
+    except Exception:
+        return None, []
+
+# ---------- Background Commons checker ----------
+_checker_thread = None
+_stop_checker = threading.Event()
+
+def commons_checker_loop():
+    print("Commons checker loop: started.")
+    settings = load_settings()
+    if not (settings.get("enable_duplicate_check") and check_file_on_commons and build_session):
+        print("Duplicate checker disabled by settings or missing module.")
+        return
+    session = build_session()
+
+    tracker = FileTracker(Path(settings["processed_files_db"]))
+    watch_folder = Path(settings["watch_folder"]).resolve()
+
+    while not _stop_checker.is_set():
+        try:
+            files = tracker.get_all_files()
+            for rec in files:
+                status = rec.get("commons_check_status", "PENDING")
+                uploaded = rec.get("uploaded", False)
+                if uploaded:
+                    continue
+                if status in ("PENDING", "CHECKING", ""):
+                    p = Path(rec["file_path"])
+                    if not p.exists():
+                        continue
+                    try:
+                        result = check_file_on_commons(
+                            p,
+                            session=session,
+                            check_scaled=settings.get("check_scaled_variants", False),
+                            fuzzy_threshold=int(settings.get("fuzzy_threshold", 10)),
+                        )
+                        tracker.update_record(
+                            p,
+                            {
+                                "sha1_local": result.get("sha1_local", "") or rec.get("sha1_local", ""),
+                                "commons_check_status": result.get("status", "ERROR"),
+                                "commons_matches": result.get("matches", []),
+                                "checked_at": result.get("checked_at", datetime.utcnow().isoformat() + "Z"),
+                                "check_details": result.get("details", ""),
+                            },
+                        )
+                    except Exception as e:
+                        tracker.update_record(
+                            p,
+                            {"commons_check_status": "ERROR", "check_details": f"{e}"},
+                        )
+            _stop_checker.wait(CHECK_LOOP_INTERVAL_SEC)
+        except Exception as e:
+            print(f"Checker loop error: {e}")
+            _stop_checker.wait(CHECK_LOOP_INTERVAL_SEC)
+
+def start_checker_thread():
+    global _checker_thread
+    if _checker_thread and _checker_thread.is_alive():
+        return
+    _checker_thread = threading.Thread(target=commons_checker_loop, daemon=True)
+    _checker_thread.start()
+
+# ---------- UI assembly ----------
+def gather_files_for_ui(settings: Dict[str, Any]) -> List[Dict[str, Any]]:
+    tracker = FileTracker(Path(settings["processed_files_db"]))
+    watch_folder = Path(settings["watch_folder"]).resolve()
+    items = []
+
+    for rec in tracker.get_all_files():
+        p = Path(rec["file_path"])
+        if not p.exists():
+            continue
+
+        try:
+            stat = p.stat()
+            size_mb = round(stat.st_size / (1024 * 1024), 2)
+        except Exception:
+            size_mb = 0.0
+
+        dims = image_dimensions(p)
+        category_slug = rec.get("category") or get_category_from_path(p, watch_folder) or \
+                        (settings.get("default_categories")[0] if settings.get("default_categories") else "")
+
+        relref = relref_from_local(p, watch_folder)
+        suggested_name = suggest_filename(p, category_slug)
+
+        status = rec.get("commons_check_status", "PENDING")
+        status_key = map_status_key(status, rec.get("uploaded", False))
+        matches = rec.get("commons_matches", [])
+        remote_primary = primary_remote_from_matches(matches)
+
+        items.append({
+            "name": p.name,
+            "path": str(p),
+            "relative_path": relref,
+            "size_mb": size_mb,
+            "created": datetime.fromtimestamp(p.stat().st_ctime).strftime("%Y-%m-%d %H:%M:%S"),
+            "dimensions": dims,
+            "sha1_local": rec.get("sha1_local", ""),
+            "commons_check_status": status,
+            "status_key": status_key,
+            "upload_suggestion": {
+                "suggested_filename": suggested_name,
+                "category_slug": category_slug,
+            },
+            "remote_primary": remote_primary,
+            "urls": {
+                "detail": url_for("file_detail", ref=relref),
+                "thumb": url_for("serve_thumbnail", ref=relref),
+                "image": url_for("serve_image", ref=relref),
+            },
+        })
+    items.sort(key=lambda x: x["created"], reverse=True)
+    return items
+
+# ---------- Routes ----------
+@app.route("/")
+def index():
+    settings = load_settings()
+    files = gather_files_for_ui(settings)
+    return render_template(
+        "index.html",
+        files=files,
+        total_files=len(files),
+        upload_enabled=UPLOAD_ENABLED,
+        settings=settings,
+    )
+
+@app.route("/file/<path:ref>")
+def file_detail(ref: str):
+    settings = load_settings()
+    watch_folder = Path(settings["watch_folder"]).resolve()
+    path = local_from_relref(ref, watch_folder)
+    if not path.exists():
+        return "File not found", 404
+
+    tracker = FileTracker(Path(settings["processed_files_db"]))
+    rec = tracker.get_record(path) or {}
+    status = rec.get("commons_check_status", "PENDING")
+    status_key = map_status_key(status, rec.get("uploaded", False))
+    matches = rec.get("commons_matches", [])
+    remote_primary = primary_remote_from_matches(matches)
+
+    # Enrich duplicates (remote SHA-1 + categories)
+    remote_categories = []
+    if remote_primary and remote_primary.get("title"):
+        sha1_hex, cats = fetch_commons_fileinfo_and_categories(remote_primary["title"])
+        if sha1_hex and not remote_primary.get("sha1_hex"):
+            remote_primary["sha1_hex"] = sha1_hex
+        for c in cats:
+            t = c.get("title")
+            if t:
+                remote_categories.append({
+                    "title": t,
+                    "url": f"https://commons.wikimedia.org/wiki/{t.replace(' ', '_')}"
+                })
+
+    dims = image_dimensions(path)
+    size_mb = round(path.stat().st_size / (1024 * 1024), 2)
+    exif = read_exif_selected(path)
+    created_exif = exif_best_created_string(path)
+
+    category_slug = rec.get("category") or get_category_from_path(path, watch_folder) or \
+                    (settings.get("default_categories")[0] if settings.get("default_categories") else "")
+    suggested_name = suggest_filename(path, category_slug)
+    relref = relref_from_local(path, watch_folder)
+
+    file_dict = {
+        "name": path.name,
+        "path": str(path),
+        "relative_path": relref,
+        "size_mb": size_mb,
+        "created": datetime.fromtimestamp(path.stat().st_ctime).strftime("%Y-%m-%d %H:%M:%S"),
+        "created_exif": created_exif,
+        "dimensions": dims,
+        "sha1_local": rec.get("sha1_local", ""),
+        "commons_check_status": status,
+        "status_key": status_key,
+        "upload_suggestion": {
+            "suggested_filename": suggested_name,
+            "category_slug": category_slug,
+        },
+        "remote_primary": remote_primary,
+        "urls": {"image": url_for("serve_image", ref=relref)},
+    }
+
+    return render_template(
+        "file_detail.html",
+        file=file_dict,
+        exif=exif,
+        remote_categories=remote_categories,
+        upload_enabled=UPLOAD_ENABLED,
+    )
+
+@app.route("/image/<path:ref>")
+def serve_image(ref: str):
+    settings = load_settings()
+    watch_folder = Path(settings["watch_folder"]).resolve()
+    path = local_from_relref(ref, watch_folder)
+    if not path.exists() or not path.is_file():
+        return "Image not found", 404
+    return send_file(str(path), mimetype="image/jpeg")
+
+@app.route("/thumbnail/<path:ref>")
+def serve_thumbnail(ref: str):
+    settings = load_settings()
+    watch_folder = Path(settings["watch_folder"]).resolve()
+    path = local_from_relref(ref, watch_folder)
+    if not path.exists() or not path.is_file():
+        return "Image not found", 404
+    try:
+        with Image.open(path) as im:
+            im.thumbnail(THUMB_MAX)
+            bio = io.BytesIO()
+            im.save(bio, "JPEG", quality=85)
+            bio.seek(0)
+            return send_file(bio, mimetype="image/jpeg")
     except Exception as e:
-        out['error'] = str(e)
-    return out
+        return f"Thumbnail error: {e}", 500
 
+# ---------- Upload helpers ----------
+def commons_api_session() -> requests.Session:
+    s = requests.Session()
+    s.headers.update({"User-Agent": COMMONS_USER_AGENT})
+    return s
 
-# ========================
-# Main
-# ========================
+def commons_login_and_token(s: requests.Session) -> str:
+    r = s.get(COMMONS_API,
+              params={"action": "query", "meta": "tokens", "type": "login", "format": "json"},
+              timeout=API_TIMEOUT)
+    r.raise_for_status()
+    login_token = r.json()["query"]["tokens"]["logintoken"]
+    r = s.post(COMMONS_API,
+               data={
+                   "action": "clientlogin",
+                   "username": COMMONS_USERNAME,
+                   "password": COMMONS_PASSWORD,
+                   "loginreturnurl": "https://example.com/",
+                   "logintoken": login_token,
+                   "format": "json",
+               },
+               timeout=API_TIMEOUT)
+    r.raise_for_status()
+    data = r.json()
+    if data.get("clientlogin", {}).get("status") != "PASS":
+        raise RuntimeError(f"Login failed: {json.dumps(data)}")
+    r = s.get(COMMONS_API,
+              params={"action": "query", "meta": "tokens", "format": "json"},
+              timeout=API_TIMEOUT)
+    r.raise_for_status()
+    return r.json()["query"]["tokens"]["csrftoken"]
 
-def start_monitoring_thread():
-    t = threading.Thread(target=start_monitoring, daemon=True)
-    t.start()
+def make_upload_text(category_slug: str, settings: Dict[str, Any]) -> str:
+    cats = []
+    if category_slug:
+        cats.append(f"[[Category:{category_slug}]]")
+    for c in settings.get("default_categories", []):
+        if c and c != category_slug:
+            cats.append(f"[[Category:{c}]]")
+    desc = "{{Information|description=Uploaded via Folder-to-Commons-Uploader}}"
+    return desc + ("\n" + "\n".join(cats) if cats else "")
 
-if __name__ == '__main__':
-    # Start file monitoring + background checker
-    start_monitoring_thread()
-    # Start Flask app (stat reloader avoids watchdog reloader issues on Windows)
-    app.run(debug=True, host='0.0.0.0', port=5001, use_reloader=True, reloader_type="stat")
+@app.route("/api/upload", methods=["POST"])
+def api_upload():
+    if not UPLOAD_ENABLED:
+        return jsonify(ok=False, error="Upload disabled: set COMMONS_USERNAME and COMMONS_PASSWORD in .env"), 400
+
+    data = request.get_json(force=True)
+    ref = data.get("filename")
+    target = data.get("target")
+    category_slug = data.get("category_slug", "")
+
+    settings = load_settings()
+    watch_folder = Path(settings["watch_folder"]).resolve()
+    try:
+        local_path = local_from_relref(ref, watch_folder)
+    except Exception as e:
+        return jsonify(ok=False, error=f"Bad filename ref: {e}"), 400
+
+    if not local_path.exists():
+        return jsonify(ok=False, error="Local file not found"), 404
+
+    s = commons_api_session()
+    try:
+        token = commons_login_and_token(s)
+        text = make_upload_text(category_slug, settings)
+        with local_path.open("rb") as f:
+            r = s.post(
+                COMMONS_API,
+                data={
+                    "action": "upload",
+                    "filename": target,
+                    "format": "json",
+                    "ignorewarnings": "1",
+                    "token": token,
+                    "text": text,
+                },
+                files={"file": (local_path.name, f, "image/jpeg")},
+                timeout=API_TIMEOUT,
+            )
+        r.raise_for_status()
+        j = r.json()
+        if "upload" not in j or j["upload"].get("result") != "Success":
+            return jsonify(ok=False, error=j), 400
+
+        # Mark uploaded in DB
+        tracker = FileTracker(Path(settings["processed_files_db"]))
+        tracker.update_record(local_path, {"uploaded": True})
+
+        title = j["upload"]["filename"]
+        url = f"https://commons.wikimedia.org/wiki/File:{title.replace(' ', '_')}"
+        return jsonify(ok=True, title=title, url=url)
+    except Exception as e:
+        return jsonify(ok=False, error=str(e)), 500
+
+@app.route("/api/bulk-upload", methods=["POST"])
+def api_bulk_upload():
+    if not UPLOAD_ENABLED:
+        return jsonify(ok=False, error="Upload disabled"), 400
+
+    settings = load_settings()
+    tracker = FileTracker(Path(settings["processed_files_db"]))
+    watch_folder = Path(settings["watch_folder"]).resolve()
+    files = tracker.get_all_files()
+
+    safe_items: List[Path] = []
+    for rec in files:
+        if rec.get("uploaded"):
+            continue
+        if (rec.get("commons_check_status") or "").upper() == "NOT_ON_COMMONS":
+            p = Path(rec["file_path"])
+            if p.exists():
+                safe_items.append(p)
+
+    s = commons_api_session()
+    try:
+        token = commons_login_and_token(s)
+    except Exception as e:
+        return jsonify(ok=False, error=f"Auth failed: {e}"), 500
+
+    uploaded_count = 0
+    for p in safe_items:
+        rrec = tracker.get_record(p) or {}
+        cat = rrec.get("category") or get_category_from_path(p, watch_folder) or \
+              (settings.get("default_categories")[0] if settings.get("default_categories") else "")
+        fname = suggest_filename(p, cat)
+        text = make_upload_text(cat, settings)
+        try:
+            with p.open("rb") as f:
+                r = s.post(
+                    COMMONS_API,
+                    data={
+                        "action": "upload",
+                        "filename": fname,
+                        "format": "json",
+                        "ignorewarnings": "1",
+                        "token": token,
+                        "text": text,
+                    },
+                    files={"file": (p.name, f, "image/jpeg")},
+                    timeout=API_TIMEOUT,
+                )
+            r.raise_for_status()
+            j = r.json()
+            if j.get("upload", {}).get("result") == "Success":
+                uploaded_count += 1
+                tracker.update_record(p, {"uploaded": True})
+        except Exception as e:
+            print(f"Bulk upload failed for {p.name}: {e}")
+
+    return jsonify(ok=True, requested=len(safe_items), uploaded=uploaded_count)
+
+# ---------- Settings UI ----------
+@app.route("/settings", methods=["GET", "POST"])
+def settings_view():
+    if request.method == "POST":
+        s = load_settings()
+        s["watch_folder"] = request.form.get("watch_folder", s["watch_folder"])
+        s["processed_files_db"] = request.form.get("processed_files_db", s["processed_files_db"])
+        s["author"] = request.form.get("author", s["author"])
+        s["copyright"] = request.form.get("copyright", s["copyright"])
+        s["source"] = request.form.get("source", s["source"])
+        s["own_work"] = request.form.get("own_work") == "on"
+
+        cats = request.form.get("default_categories", "")
+        s["default_categories"] = [c.strip() for c in cats.split(",") if c.strip()]
+
+        s["enable_duplicate_check"] = request.form.get("enable_duplicate_check") == "on"
+        s["check_scaled_variants"] = request.form.get("check_scaled_variants") == "on"
+        try:
+            s["fuzzy_threshold"] = int(request.form.get("fuzzy_threshold", s["fuzzy_threshold"]))
+        except Exception:
+            pass
+
+        save_settings(s)
+        flash("Settings saved.", "success")
+        return redirect(url_for("settings_view"))
+
+    s = load_settings()
+    return render_template("settings.html", settings=s, upload_enabled=UPLOAD_ENABLED)
+
+# ---------- App start ----------
+if __name__ == "__main__":
+    start_checker_thread()
+    app.run(debug=True, host="0.0.0.0", port=5001)

@@ -2,7 +2,6 @@
 """
 Commons Duplicate Checker
 Checks if a file already exists on Wikimedia Commons using SHA-1 hash matching.
-Simplified from wmc_check_local_by_sha1.py for single-file checking.
 """
 
 from __future__ import annotations
@@ -26,7 +25,7 @@ from urllib.parse import quote
 # =========================
 
 COMMONS_API = "https://commons.wikimedia.org/w/api.php"
-USER_AGENT = "MacOS-to-Commons-Uploader - Duplicate Checker - Contact: github.com/daanvr"
+USER_AGENT = "Folder-to-Commons-Uploader - Duplicate Commons Checker - Contact: github.com/kbnlwikimedia"
 TIMEOUT_SECS = 20
 RETRIES_TOTAL = 5
 RETRIES_BACKOFF = 0.6

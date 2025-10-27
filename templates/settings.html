@@ -1,108 +1,166 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Settings - Folder-to-Commons-Uploader</title>
-    <style>
-        * { margin: 0; padding: 0; box-sizing: border-box; }
-        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif; background: #f5f5f5; color: #333; line-height: 1.6; }
-        .header { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 2rem; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
-        .header h1 { font-size: 2rem; margin-bottom: 0.5rem; }
-        .back-link { color: white; text-decoration: none; opacity: 0.9; display: inline-block; margin-bottom: 1rem; font-size: 0.95rem; }
-        .back-link:hover { opacity: 1; }
-        .container { max-width: 800px; margin: 2rem auto; padding: 0 1rem; }
-        .card { background: white; border-radius: 12px; padding: 2rem; box-shadow: 0 2px 10px rgba(0,0,0,0.08); }
-        .alert { padding: 1rem; border-radius: 8px; margin-bottom: 1.5rem; }
-        .alert-success { background: #d4edda; color: #155724; border: 1px solid #c3e6cb; }
-        .form-group { margin-bottom: 1.5rem; }
-        .form-group label { display: block; font-weight: 600; color: #555; margin-bottom: 0.5rem; }
-        .form-group input[type="text"], .form-group input[type="email"], .form-group textarea { width: 100%; padding: 0.75rem; border: 2px solid #e0e0e0; border-radius: 8px; font-size: 1rem; font-family: inherit; transition: border-color 0.2s; }
-        .form-group input[type="text"]:focus, .form-group input[type="email"]:focus, .form-group textarea:focus { outline: none; border-color: #667eea; }
-        .form-group textarea { min-height: 100px; resize: vertical; }
-        .form-group .help-text { font-size: 0.9rem; color: #666; margin-top: 0.25rem; }
-        .checkbox-group { display: flex; align-items: center; margin-top: 0.5rem; }
-        .checkbox-group input[type="checkbox"] { width: 20px; height: 20px; margin-right: 0.5rem; cursor: pointer; }
-        .checkbox-group label { margin: 0; cursor: pointer; }
-        .form-actions { display: flex; gap: 1rem; margin-top: 2rem; }
-        .btn { padding: 0.75rem 1.5rem; border: none; border-radius: 8px; font-size: 1rem; font-weight: 500; cursor: pointer; transition: all 0.2s; }
-        .btn-primary { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; }
-        .btn-primary:hover { transform: translateY(-2px); box-shadow: 0 4px 12px rgba(102, 126, 234, 0.4); }
-        .btn-secondary { background: #e0e0e0; color: #333; }
-        .btn-secondary:hover { background: #d0d0d0; }
-        .section-title { font-size: 1.2rem; color: #667eea; margin-bottom: 1rem; padding-bottom: 0.5rem; border-bottom: 2px solid #f0f0f0; }
-        .info-box { background: #f8f9fa; border-left: 4px solid #667eea; padding: 1rem; border-radius: 4px; margin-bottom: 1.5rem; }
-        .info-box p { margin: 0; color: #666; font-size: 0.95rem; }
-    </style>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Settings - Folder-to-Commons-Uploader</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif; background: #f5f5f5; color: #333; line-height: 1.6; }
+    .header { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 2rem; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
+    .header h1 { font-size: 2rem; margin-bottom: 0.5rem; }
+    .back-link { color: white; text-decoration: none; opacity: 0.9; display: inline-block; margin-bottom: 1rem; font-size: 0.95rem; }
+    .back-link:hover { opacity: 1; }
+    .container { max-width: 900px; margin: 2rem auto; padding: 0 1rem; }
+    .card { background: white; border-radius: 12px; padding: 2rem; box-shadow: 0 2px 10px rgba(0,0,0,0.08); }
+    .alert { padding: 1rem; border-radius: 8px; margin-bottom: 1.5rem; }
+    .alert-success { background: #d4edda; color: #155724; border: 1px solid #c3e6cb; }
+    .section { margin-top: 1.75rem; }
+    .section-title { font-size: 1.1rem; color: #667eea; margin-bottom: 1rem; padding-bottom: 0.4rem; border-bottom: 2px solid #f0f0f0; }
+    .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px 18px; }
+    @media (max-width: 780px) { .grid { grid-template-columns: 1fr; } }
+    .form-group { display:flex; flex-direction:column; }
+    .form-group label { font-weight: 600; color: #555; margin-bottom: 0.35rem; }
+    .form-group input[type="text"],
+    .form-group input[type="number"],
+    .form-group textarea { width: 100%; padding: 0.6rem 0.7rem; border: 2px solid #e0e0e0; border-radius: 8px; font-size: 1rem; }
+    .form-group small { color:#666; }
+    .checkbox { display:flex; align-items:center; gap:8px; }
+    .row { display:flex; gap:12px; align-items:center; flex-wrap:wrap; }
+    .btn { padding: 0.75rem 1.25rem; border: none; border-radius: 8px; font-size: 1rem; font-weight: 600; cursor: pointer; }
+    .btn-primary { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; }
+    .btn-secondary { background:#e5e7eb; }
+    code { background:#f3f4f6; padding:2px 6px; border-radius:6px; }
+  </style>
 </head>
 <body>
-    <div class="header">
-        <a href="/" class="back-link">← Back to Files</a>
-        <h1>Settings</h1>
+  <div class="header">
+    <a href="{{ url_for('index') }}" class="back-link">← Back to Files</a>
+    <h1>Settings</h1>
+    <div style="opacity:.9; margin-top:.25rem;">
+      {% if upload_enabled %}
+        Upload: <strong>enabled</strong> (credentials loaded from <code>.env</code>)
+      {% else %}
+        Upload: <strong>disabled</strong> — add <code>COMMONS_USERNAME</code> and <code>COMMONS_PASSWORD</code> to <code>.env</code>, then restart.
+      {% endif %}
     </div>
+  </div>
 
-    <div class="container">
-        <div class="card">
-            {% with messages = get_flashed_messages(with_categories=true) %}
-                {% if messages %}
-                    {% for category, message in messages %}
-                        <div class="alert alert-{{ category }}">{{ message }}</div>
-                    {% endfor %}
-                {% endif %}
-            {% endwith %}
+  <div class="container">
+    <div class="card">
+      {% with messages = get_flashed_messages(with_categories=true) %}
+        {% if messages %}
+          {% for category, message in messages %}
+            <div class="alert alert-{{ category }}">{{ message }}</div>
+          {% endfor %}
+        {% endif %}
+      {% endwith %}
 
-            <form method="POST" action="{{ url_for('settings_view') }}">
-                <div class="info-box">
-                    <p>Configure default metadata for file uploads to Wikimedia Commons. These settings will be applied to all uploads.</p>
-                </div>
+      <form method="POST" action="{{ url_for('settings_view') }}">
+        <!-- File Monitoring -->
+        <div class="section">
+          <div class="section-title">File monitoring</div>
+          <div class="grid">
+            <div class="form-group">
+              <label for="watch_folder">Watch folder</label>
+              <input type="text" id="watch_folder" name="watch_folder" value="{{ settings.watch_folder }}" required>
+              <small>Folder that monitor.py watches for new files</small>
+            </div>
 
-                <div class="section-title">File Monitoring</div>
+            <div class="form-group">
+              <label for="processed_files_db">Processed files DB</label>
+              <input type="text" id="processed_files_db" name="processed_files_db" value="{{ settings.processed_files_db }}" required>
+              <small>JSON database path used by the monitor and this UI</small>
+            </div>
 
-                <div class="form-group">
-                    <label for="watch_folder">Watch Folder</label>
-                    <input type="text" id="watch_folder" name="watch_folder" value="{{ settings.watch_folder }}" required>
-                    <div class="help-text">Path to the folder where new files will be monitored</div>
-                </div>
+            <div class="form-group">
+              <label for="file_ready_min_stable_secs">Min stable seconds</label>
+              <input type="number" step="0.1" min="0" id="file_ready_min_stable_secs" name="file_ready_min_stable_secs" value="{{ settings.file_ready_min_stable_secs }}">
+              <small>Time the file size must remain unchanged before processing</small>
+            </div>
 
-                <div class="section-title">Upload Metadata</div>
+            <div class="form-group">
+              <label for="file_ready_max_wait_secs">Max wait seconds</label>
+              <input type="number" step="1" min="0" id="file_ready_max_wait_secs" name="file_ready_max_wait_secs" value="{{ settings.file_ready_max_wait_secs }}">
+              <small>Give slow writes (network/cloud) more time</small>
+            </div>
 
-                <div class="form-group">
-                    <label for="author">Author</label>
-                    <input type="text" id="author" name="author" value="{{ settings.author }}">
-                    <div class="help-text">Your name (author of the files)</div>
-                </div>
-
-                <div class="form-group">
-                    <label for="copyright">Copyright/License</label>
-                    <input type="text" id="copyright" name="copyright" value="{{ settings.copyright }}" required>
-                    <div class="help-text">E.g., CC-BY-SA-4.0, CC0, etc.</div>
-                </div>
-
-                <div class="form-group">
-                    <label for="source">Source</label>
-                    <input type="text" id="source" name="source" value="{{ settings.source }}" required>
-                    <div class="help-text">E.g., "Own work", "Transferred from..."</div>
-                </div>
-
-                <div class="form-group">
-                    <div class="checkbox-group">
-                        <input type="checkbox" id="own_work" name="own_work" {% if settings.own_work %}checked{% endif %}>
-                        <label for="own_work">This is my own work</label>
-                    </div>
-                </div>
-
-                <div class="form-group">
-                    <label for="default_categories">Default Categories</label>
-                    <input type="text" id="default_categories" name="default_categories" value="{{ settings.default_categories | join(', ') }}">
-                    <div class="help-text">Comma-separated list of categories to be added to all uploads</div>
-                </div>
-
-                <div class="form-actions">
-                    <button type="submit" class="btn btn-primary">Save Settings</button>
-                    <a href="/" class="btn btn-secondary">Cancel</a>
-                </div>
-            </form>
+            <div class="form-group">
+              <label for="file_ready_poll_interval">Poll interval (seconds)</label>
+              <input type="number" step="0.1" min="0.1" id="file_ready_poll_interval" name="file_ready_poll_interval" value="{{ settings.file_ready_poll_interval }}">
+              <small>How often to re-check file readiness</small>
+            </div>
+          </div>
         </div>
+
+        <!-- Duplicate checking -->
+        <div class="section">
+          <div class="section-title">Duplicate checking</div>
+          <div class="grid">
+            <div class="form-group checkbox">
+              <input type="checkbox" id="enable_duplicate_check" name="enable_duplicate_check" {% if settings.enable_duplicate_check %}checked{% endif %}>
+              <label for="enable_duplicate_check">Enable Commons duplicate check</label>
+            </div>
+
+            <div class="form-group checkbox">
+              <input type="checkbox" id="check_scaled_variants" name="check_scaled_variants" {% if settings.check_scaled_variants %}checked{% endif %}>
+              <label for="check_scaled_variants">Detect scaled variants</label>
+            </div>
+
+            <div class="form-group">
+              <label for="fuzzy_threshold">Fuzzy threshold</label>
+              <input type="number" step="1" min="1" max="50" id="fuzzy_threshold" name="fuzzy_threshold" value="{{ settings.fuzzy_threshold }}">
+              <small>Lower = stricter. Used for scaled-variant detection.</small>
+            </div>
+
+            <div class="form-group checkbox">
+              <input type="checkbox" id="block_duplicate_uploads" name="block_duplicate_uploads" {% if settings.block_duplicate_uploads %}checked{% endif %}>
+              <label for="block_duplicate_uploads">Block uploads when a duplicate/variant is detected</label>
+            </div>
+          </div>
+        </div>
+
+        <!-- Upload metadata -->
+        <div class="section">
+          <div class="section-title">Upload metadata (defaults)</div>
+          <div class="grid">
+            <div class="form-group">
+              <label for="author">Author</label>
+              <input type="text" id="author" name="author" value="{{ settings.author }}">
+            </div>
+
+            <div class="form-group">
+              <label for="copyright">Copyright / License</label>
+              <input type="text" id="copyright" name="copyright" value="{{ settings.copyright }}">
+              <small>Example: CC-BY-SA-4.0 or CC0</small>
+            </div>
+
+            <div class="form-group">
+              <label for="source">Source</label>
+              <input type="text" id="source" name="source" value="{{ settings.source }}">
+              <small>Example: {{'{{own}}'}} for own work</small>
+            </div>
+
+            <div class="form-group checkbox">
+              <input type="checkbox" id="own_work" name="own_work" {% if settings.own_work %}checked{% endif %}>
+              <label for="own_work">This is my own work</label>
+            </div>
+
+            <div class="form-group" style="grid-column:1 / -1">
+              <label for="default_categories">Default categories (comma-separated)</label>
+              <input type="text" id="default_categories" name="default_categories" value="{{ settings.default_categories | join(', ') }}">
+            </div>
+          </div>
+        </div>
+
+        <div class="section" style="margin-top:1.5rem;">
+          <div class="row">
+            <button type="submit" class="btn btn-primary">Save settings</button>
+            <a href="{{ url_for('index') }}" class="btn btn-secondary">Cancel</a>
+          </div>
+        </div>
+      </form>
     </div>
+  </div>
 </body>
 </html>
