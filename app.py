@@ -25,10 +25,9 @@ from __future__ import annotations
 
 import io
 import json
-import os
 import threading
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 from typing import Any, Dict, List, Optional
 
@@ -39,6 +38,15 @@ from PIL import Image, ExifTags
 import requests
 from dotenv import load_dotenv
 
+# ---------- Import shared modules ----------
+from lib.config import (
+    load_settings, save_settings, get_commons_credentials, is_upload_enabled,
+    API_TIMEOUT, COMMONS_API, CHECK_LOOP_INTERVAL_SEC, THUMB_MAX
+)
+from lib.file_tracker import FileTracker
+from lib.status import CommonsCheckStatus, map_status_to_ui_key
+from lib.logger import get_app_logger
+
 # ---------- Try to import the checker from either location ----------
 try:
     from lib.commons_duplicate_checker import check_file_on_commons, build_session
@@ -48,136 +56,20 @@ except Exception:
     except Exception:
         check_file_on_commons = None
         build_session = None
-        print("⚠️  commons_duplicate_checker not found: duplicate checking disabled.")
+        logger = get_app_logger()
+        logger.warning("commons_duplicate_checker not found: duplicate checking disabled.")
 
 # ---------- Flask ----------
 app = Flask(__name__)
 app.secret_key = "dev-secret-key-change-in-production"
 
-# ---------- Constants ----------
-API_TIMEOUT = 30
-CHECK_LOOP_INTERVAL_SEC = 6
-READ_CHUNK = 1024 * 1024
-THUMB_MAX = (300, 300)
-COMMONS_API = "https://commons.wikimedia.org/w/api.php"
+# ---------- Logger ----------
+logger = get_app_logger()
 
 # ---------- ENV (upload credentials) ----------
 load_dotenv()
-def _strip_quotes(s: Optional[str]) -> Optional[str]:
-    if s is None:
-        return None
-    s = s.strip()
-    if (s.startswith('"') and s.endswith('"')) or (s.startswith("'") and s.endswith("'")):
-        return s[1:-1]
-    return s
-
-COMMONS_USERNAME = _strip_quotes(os.getenv("COMMONS_USERNAME"))
-COMMONS_PASSWORD = _strip_quotes(os.getenv("COMMONS_PASSWORD"))
-COMMONS_USER_AGENT = _strip_quotes(os.getenv("COMMONS_USER_AGENT")) or \
-    "Folder-to-Commons-Uploader/1.0 (contact: unknown)"
-UPLOAD_ENABLED = bool(COMMONS_USERNAME and COMMONS_PASSWORD)
-
-# ---------- Settings ----------
-DEFAULT_SETTINGS = {
-    "watch_folder": "files-to-be-uploaded",
-    "processed_files_db": "data/processed_files.json",
-    "author": "",
-    "copyright": "",
-    "source": "",
-    "own_work": True,
-    "default_categories": [],
-    "enable_duplicate_check": True,
-    "check_scaled_variants": False,
-    "fuzzy_threshold": 10
-}
-
-def load_settings() -> Dict[str, Any]:
-    p = Path("settings.json")
-    if not p.exists():
-        p.parent.mkdir(parents=True, exist_ok=True)
-        with p.open("w", encoding="utf-8") as f:
-            json.dump(DEFAULT_SETTINGS, f, indent=2)
-        return DEFAULT_SETTINGS.copy()
-    try:
-        with p.open("r", encoding="utf-8") as f:
-            data = json.load(f)
-    except Exception:
-        data = DEFAULT_SETTINGS.copy()
-        with p.open("w", encoding="utf-8") as f:
-            json.dump(data, f, indent=2)
-    for k, v in DEFAULT_SETTINGS.items():
-        data.setdefault(k, v)
-    return data
-
-def save_settings(settings: Dict[str, Any]) -> None:
-    p = Path("settings.json")
-    p.parent.mkdir(parents=True, exist_ok=True)
-    tmp = p.with_suffix(".tmp")
-    with tmp.open("w", encoding="utf-8") as f:
-        json.dump(settings, f, indent=2)
-    tmp.replace(p)
-
-# ---------- FileTracker (robust JSON I/O) ----------
-class FileTracker:
-    def __init__(self, db_path: Path):
-        self.db_path = db_path
-        self.lock = threading.Lock()
-        self.processed_files = self._load()
-
-    def _load(self) -> Dict[str, Dict[str, Any]]:
-        if not self.db_path.exists():
-            return {}
-        try:
-            with self.db_path.open("r", encoding="utf-8") as f:
-                text = f.read().strip()
-                if not text:
-                    return {}
-                data = json.loads(text)
-                if isinstance(data, list):
-                    return {str(p): self._create_file_record(p) for p in data}
-                if isinstance(data, dict):
-                    return data
-        except Exception as e:
-            print(f"⚠️  processed_files.json load failed ({e}); continuing with empty DB.")
-        return {}
-
-    def _atomic_save(self) -> None:
-        self.db_path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = self.db_path.with_suffix(".tmp")
-        with tmp.open("w", encoding="utf-8") as f:
-            json.dump(self.processed_files, f, indent=2)
-        tmp.replace(self.db_path)
-
-    def _create_file_record(self, file_path: str, **kwargs) -> Dict[str, Any]:
-        return {
-            "file_path": str(file_path),
-            "detected_at": datetime.utcnow().isoformat() + "Z",
-            "sha1_local": kwargs.get("sha1_local", ""),
-            "commons_check_status": kwargs.get("commons_check_status", "PENDING"),
-            "commons_matches": kwargs.get("commons_matches", []),
-            "checked_at": kwargs.get("checked_at", ""),
-            "check_details": kwargs.get("check_details", ""),
-            "category": kwargs.get("category", None),
-            "uploaded": kwargs.get("uploaded", False),
-        }
-
-    def get_all_files(self) -> List[Dict[str, Any]]:
-        with self.lock:
-            return list(self.processed_files.values())
-
-    def get_record(self, file_path: Path) -> Optional[Dict[str, Any]]:
-        with self.lock:
-            return self.processed_files.get(str(file_path))
-
-    def update_record(self, file_path: Path, updates: Dict[str, Any]) -> None:
-        with self.lock:
-            key = str(file_path)
-            rec = self.processed_files.get(key)
-            if rec is None:
-                rec = self._create_file_record(key)
-                self.processed_files[key] = rec
-            rec.update(updates)
-            self._atomic_save()
+COMMONS_USERNAME, COMMONS_PASSWORD, COMMONS_USER_AGENT = get_commons_credentials()
+UPLOAD_ENABLED = is_upload_enabled()
 
 # ---------- Path/URL helpers ----------
 def relref_from_local(local_path: Path, watch_folder: Path) -> str:
@@ -275,24 +167,10 @@ def exif_best_created_string(path: Path) -> Optional[str]:
 
 # ---------- Status mapping for UI ----------
 def map_status_key(rec_status: str, uploaded: bool) -> str:
-    s = (rec_status or "").upper()
+    """Map status to UI key, with upload override."""
     if uploaded:
         return "uploaded"
-    if s in ("EXACT_MATCH",):
-        return "duplicate"
-    if s in ("POSSIBLE_SCALED_VARIANT",):
-        return "scaled"
-    if s in ("EXISTS_DIFFERENT_CONTENT",):
-        return "nameexists"
-    if s in ("NOT_ON_COMMONS",):
-        return "safe"
-    if s in ("CHECKING", "PENDING", ""):
-        return "checking"
-    if s in ("DISABLED",):
-        return "disabled"
-    if s in ("ERROR",):
-        return "error"
-    return "checking"
+    return map_status_to_ui_key(rec_status)
 
 def primary_remote_from_matches(matches: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
     if not matches:
@@ -348,10 +226,10 @@ _checker_thread = None
 _stop_checker = threading.Event()
 
 def commons_checker_loop():
-    print("Commons checker loop: started.")
+    logger.info("Commons checker loop: started.")
     settings = load_settings()
     if not (settings.get("enable_duplicate_check") and check_file_on_commons and build_session):
-        print("Duplicate checker disabled by settings or missing module.")
+        logger.info("Duplicate checker disabled by settings or missing module.")
         return
     session = build_session()
 
@@ -362,11 +240,11 @@ def commons_checker_loop():
         try:
             files = tracker.get_all_files()
             for rec in files:
-                status = rec.get("commons_check_status", "PENDING")
+                status = rec.get("commons_check_status", CommonsCheckStatus.PENDING)
                 uploaded = rec.get("uploaded", False)
                 if uploaded:
                     continue
-                if status in ("PENDING", "CHECKING", ""):
+                if CommonsCheckStatus.is_checking(status):
                     p = Path(rec["file_path"])
                     if not p.exists():
                         continue
@@ -381,20 +259,21 @@ def commons_checker_loop():
                             p,
                             {
                                 "sha1_local": result.get("sha1_local", "") or rec.get("sha1_local", ""),
-                                "commons_check_status": result.get("status", "ERROR"),
+                                "commons_check_status": result.get("status", CommonsCheckStatus.ERROR),
                                 "commons_matches": result.get("matches", []),
-                                "checked_at": result.get("checked_at", datetime.utcnow().isoformat() + "Z"),
+                                "checked_at": result.get("checked_at", datetime.now(timezone.utc).isoformat()),
                                 "check_details": result.get("details", ""),
                             },
                         )
                     except Exception as e:
+                        logger.error(f"Error checking {p.name}: {e}")
                         tracker.update_record(
                             p,
-                            {"commons_check_status": "ERROR", "check_details": f"{e}"},
+                            {"commons_check_status": CommonsCheckStatus.ERROR, "check_details": f"{e}"},
                         )
             _stop_checker.wait(CHECK_LOOP_INTERVAL_SEC)
         except Exception as e:
-            print(f"Checker loop error: {e}")
+            logger.error(f"Checker loop error: {e}")
             _stop_checker.wait(CHECK_LOOP_INTERVAL_SEC)
 
 def start_checker_thread():
@@ -428,7 +307,7 @@ def gather_files_for_ui(settings: Dict[str, Any]) -> List[Dict[str, Any]]:
         relref = relref_from_local(p, watch_folder)
         suggested_name = suggest_filename(p, category_slug)
 
-        status = rec.get("commons_check_status", "PENDING")
+        status = rec.get("commons_check_status", CommonsCheckStatus.PENDING)
         status_key = map_status_key(status, rec.get("uploaded", False))
         matches = rec.get("commons_matches", [])
         remote_primary = primary_remote_from_matches(matches)
@@ -671,7 +550,7 @@ def api_bulk_upload():
     for rec in files:
         if rec.get("uploaded"):
             continue
-        if (rec.get("commons_check_status") or "").upper() == "NOT_ON_COMMONS":
+        if CommonsCheckStatus.is_safe_to_upload(rec.get("commons_check_status", "")):
             p = Path(rec["file_path"])
             if p.exists():
                 safe_items.append(p)
@@ -710,7 +589,7 @@ def api_bulk_upload():
                 uploaded_count += 1
                 tracker.update_record(p, {"uploaded": True})
         except Exception as e:
-            print(f"Bulk upload failed for {p.name}: {e}")
+            logger.error(f"Bulk upload failed for {p.name}: {e}")
 
     return jsonify(ok=True, requested=len(safe_items), uploaded=uploaded_count)
 
