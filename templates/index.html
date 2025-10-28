@@ -76,7 +76,7 @@
     .status-filter.active { background:#2563eb; color:#fff; border-color:#2563eb; }
     .status-filter .count { margin-left:4px; opacity:0.8; }
     .category-header { padding:16px 0; }
-    .category-controls { display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-top:8px; }
+    .category-controls { display:none; gap:8px; align-items:center; flex-wrap:wrap; margin-top:8px; }
     .category-rename { display:flex; gap:8px; align-items:center; position:relative; }
     .category-rename input { width:250px; }
 
@@ -417,7 +417,7 @@
       if (controlsDiv) {
         // Only show controls when filter is 'safe'
         if (status === 'safe') {
-          controlsDiv.style.display = '';
+          controlsDiv.style.display = 'flex';
         } else {
           controlsDiv.style.display = 'none';
         }
