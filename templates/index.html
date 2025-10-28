@@ -12,7 +12,8 @@
     body { margin:0; font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; background:var(--bg); color:var(--ink); }
     header { background:#fff; border-bottom:1px solid var(--br); }
     .wrap { max-width:1200px; margin:0 auto; padding:12px 16px; }
-    h1 { font-size:20px; margin:0; }
+    h1 { font-size:32px; margin:0; font-weight:800; }
+    .subtitle { font-size:16px; color:var(--muted); margin:8px 0 0 0; max-width:800px; line-height:1.5; }
     .controls { display:flex; flex-wrap:wrap; gap:10px; align-items:center; margin-top:10px; }
     .ctrl { display:flex; align-items:center; gap:6px; }
     input[type="text"], select {
@@ -27,7 +28,11 @@
     @media (max-width: 700px) { .grid { grid-template-columns: 1fr; } }
 
     .card { background:var(--panel); border-radius:12px; box-shadow:0 1px 3px rgba(0,0,0,.06); overflow:hidden; display:flex; flex-direction:column; }
-    .thumb { width:100%; height:210px; object-fit:cover; background:#ddd; }
+    .thumb-container { position:relative; width:100%; height:210px; cursor:pointer; }
+    .thumb { width:100%; height:100%; object-fit:cover; background:#ddd; display:block; }
+    .thumb-overlay { position:absolute; bottom:0; left:0; right:0; background:linear-gradient(to top, rgba(0,0,0,0.85), rgba(0,0,0,0.4), transparent); padding:12px; }
+    .thumb-overlay .title { font-weight:700; color:#fff; margin:0 0 6px 0; font-size:15px; text-shadow:0 1px 3px rgba(0,0,0,0.5); }
+    .thumb-overlay .pill { margin-top:4px; }
     .body { padding:12px; display:flex; flex-direction:column; gap:8px; }
     .title { font-weight:700; text-decoration:none; color:#1f2937; }
     .muted { color:var(--muted); }
@@ -44,14 +49,57 @@
     .footer { display:flex; justify-content:space-between; align-items:center; margin-top:8px; }
     .links { display:flex; gap:6px; }
     .chiplink { color:#2563eb; text-decoration:none; font-weight:600; }
+
+    /* Category Manager Modal */
+    .modal { display:none; position:fixed; top:0; left:0; right:0; bottom:0; background:rgba(0,0,0,0.5); z-index:1000; align-items:center; justify-content:center; }
+    .modal.active { display:flex; }
+    .modal-content { background:#fff; border-radius:12px; padding:24px; max-width:800px; width:90%; max-height:80vh; overflow-y:auto; }
+    .modal-title { font-size:20px; font-weight:700; margin:0 0 16px; }
+    .cat-table { width:100%; border-collapse:collapse; }
+    .cat-table th { text-align:left; padding:10px 8px; border-bottom:2px solid var(--br); font-weight:600; color:var(--muted); font-size:13px; text-transform:uppercase; }
+    .cat-table td { padding:12px 8px; border-bottom:1px solid var(--br); }
+    .cat-table input { width:100%; padding:6px 10px; border:1px solid var(--br); border-radius:6px; }
+    .cat-table .btn { padding:6px 12px; font-size:13px; }
+
+    /* Tab Navigation */
+    .tabs { display:flex; gap:4px; border-bottom:2px solid var(--br); margin-top:16px; overflow-x:auto; }
+    .tab { padding:12px 20px; background:transparent; border:none; border-bottom:3px solid transparent; cursor:pointer; font-weight:600; color:var(--muted); white-space:nowrap; transition:all 0.2s; }
+    .tab:hover { background:var(--bg); color:var(--ink); }
+    .tab.active { color:#2563eb; border-bottom-color:#2563eb; }
+    .tab-content { display:none; }
+    .tab-content.active { display:block; }
+
+    /* Status Filters */
+    .status-filters { display:flex; gap:6px; flex-wrap:wrap; margin-top:12px; padding-bottom:12px; border-bottom:1px solid var(--br); }
+    .status-filter { padding:6px 12px; background:#fff; border:1px solid var(--br); border-radius:20px; cursor:pointer; font-size:13px; font-weight:600; transition:all 0.2s; white-space:nowrap; }
+    .status-filter:hover { background:var(--bg); }
+    .status-filter.active { background:#2563eb; color:#fff; border-color:#2563eb; }
+    .status-filter .count { margin-left:4px; opacity:0.8; }
+    .category-header { padding:16px 0; }
+    .category-controls { display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-top:8px; }
+    .category-rename { display:flex; gap:8px; align-items:center; position:relative; }
+    .category-rename input { width:250px; }
+
+    /* Autocomplete dropdown */
+    .autocomplete-container { position:relative; display:inline-block; }
+    .autocomplete-suggestions { position:absolute; top:100%; left:0; right:0; background:#fff; border:1px solid var(--br); border-top:none; border-radius:0 0 8px 8px; max-height:300px; overflow-y:auto; z-index:1000; box-shadow:0 4px 6px rgba(0,0,0,0.1); display:none; }
+    .autocomplete-suggestions.active { display:block; }
+    .autocomplete-suggestion { padding:10px 12px; cursor:pointer; border-bottom:1px solid #f0f0f0; }
+    .autocomplete-suggestion:hover { background:var(--bg); }
+    .autocomplete-suggestion:last-child { border-bottom:none; }
   </style>
 </head>
 <body>
   <header>
     <div class="wrap">
-      <div style="display:flex; justify-content:space-between; align-items:center; gap:12px;">
-        <h1>Folder → Commons Uploader</h1>
-        <a class="btn" href="{{ url_for('settings_view') }}">Settings</a>
+      <div style="display:flex; justify-content:space-between; align-items:flex-start; gap:12px; padding:16px 0;">
+        <div>
+          <h1>Folder → Commons Uploader</h1>
+          {% if settings.app_subtitle %}
+          <p class="subtitle">{{ settings.app_subtitle }}</p>
+          {% endif %}
+        </div>
+        <a class="btn" href="{{ url_for('settings_view') }}" style="flex-shrink:0;">Settings</a>
       </div>
 
       <div class="controls">
@@ -60,182 +108,646 @@
           <input id="q" type="text" placeholder="filename or suggestion…" oninput="applyFilters()">
         </div>
         <div class="ctrl">
-          <label for="status" class="muted">Status</label>
-          <select id="status" onchange="applyFilters()">
-            <option value="all">All</option>
-            <option value="safe">Safe to upload</option>
-            <option value="duplicate">Duplicate</option>
-            <option value="nameexists">Name exists (diff content)</option>
-            <option value="scaled">Scaled variant</option>
-            <option value="checking">Checking…</option>
-            <option value="error">Error</option>
-            <option value="uploaded">Uploaded</option>
-          </select>
+          <button class="btn" onclick="window.location.reload()">Refresh page</button>
         </div>
         <div class="ctrl">
-          <label class="muted"><input type="checkbox" id="autorefresh" onchange="toggleAutoRefresh(this)"> Auto-refresh</label>
+          <span class="muted">Total files: {{ total_files }}</span>
         </div>
-        <div class="ctrl">
-          <span class="muted">Visible: <span id="visibleCount">0</span> / {{ total_files }}</span>
-        </div>
-        {% if upload_enabled %}
-        <div class="ctrl" id="bulkBox" style="display:none;">
-          <button class="btn primary" onclick="bulkUpload()">Bulk upload all visible “Safe to upload”</button>
-        </div>
-        {% endif %}
       </div>
     </div>
   </header>
 
   <main class="wrap">
-    {% if files|length == 0 %}
+    {% if total_files == 0 %}
       <p class="muted">No files yet. Drop JPEGs in <code>{{ settings.watch_folder }}</code> and keep this page open.</p>
-    {% endif %}
+    {% else %}
+      <!-- Tab Navigation -->
+      <div class="tabs">
+        {% for category in categories %}
+        <button class="tab {% if loop.first %}active{% endif %}" onclick="switchTab('{{ category }}')">
+          {{ category }} ({{ grouped_files[category]|length }})
+        </button>
+        {% endfor %}
+      </div>
 
-    <div id="cards" class="grid">
-      {% for f in files %}
-      <div class="card file-card"
-           data-name="{{ f.name|lower }}"
-           data-suggest="{{ f.upload_suggestion.suggested_filename|lower }}"
-           data-status="{{ f.status_key }}">
-        <img class="thumb" src="{{ f.urls.thumb }}" loading="lazy" alt="">
+      <!-- Tab Contents -->
+      {% for category in categories %}
+      <div id="tab-{{ category }}" class="tab-content {% if loop.first %}active{% endif %}" data-category="{{ category }}">
+        <div class="category-header">
+          <h2 style="margin:0; font-size:18px;">{{ category }} — <span class="visible-count">{{ grouped_files[category]|length }}</span> / {{ grouped_files[category]|length }} file(s)</h2>
+          {% set safe_count = grouped_files[category]|selectattr('status_key', 'equalto', 'safe')|list|length %}
+          {% if upload_enabled and safe_count > 0 %}
+          <div class="category-controls" id="controls-{{ category }}">
+            {% if category != '(No subfolder)' %}
+            <div class="category-rename">
+              <div class="autocomplete-container">
+                <input type="text" id="rename-{{ category }}" class="category-input" value="{{ category }}" placeholder="New category name" autocomplete="off">
+                <div class="autocomplete-suggestions" id="suggestions-rename-{{ category }}"></div>
+              </div>
+              <button class="btn" onclick="renameCategoryForGroup('{{ category }}')">Rename for All in Group</button>
+              <button class="btn" onclick="revertCategoryForGroup('{{ category }}')">Revert to Original</button>
+            </div>
+            {% endif %}
+            <button class="btn primary bulk-upload-btn" data-category="{{ category }}" onclick="bulkUploadGroup('{{ category }}')">Bulk upload all Safe images in this group ({{ safe_count }})</button>
+          </div>
+          {% endif %}
+        </div>
+
+        <!-- Status Filters for this group -->
+        <div class="status-filters" id="filters-{{ category }}">
+          <div class="status-filter active" data-status="all" onclick="filterGroupByStatus('{{ category }}', 'all')">
+            All <span class="count">({{ grouped_files[category]|length }})</span>
+          </div>
+          {% set status_counts = {} %}
+          {% for f in grouped_files[category] %}
+            {% set _ = status_counts.update({f.status_key: status_counts.get(f.status_key, 0) + 1}) %}
+          {% endfor %}
+
+          {# Define status display order and labels #}
+          {% set status_order = [
+            ('safe', 'Safe to upload'),
+            ('duplicate', 'Duplicate'),
+            ('conflict', 'Name conflict'),
+            ('scaled', 'Scaled variant'),
+            ('checking', 'Checking...'),
+            ('error', 'Error'),
+            ('uploaded', 'Uploaded')
+          ] %}
+
+          {# Show filters for all status types that exist in this group #}
+          {% for status_key, status_label in status_order %}
+            {% if status_counts.get(status_key, 0) > 0 %}
+            <div class="status-filter" data-status="{{ status_key }}" onclick="filterGroupByStatus('{{ category }}', '{{ status_key }}')">
+              {{ status_label }} <span class="count">({{ status_counts[status_key] }})</span>
+            </div>
+            {% endif %}
+          {% endfor %}
+        </div>
+
+        <div id="cards-{{ category }}" class="grid">
+          {% for f in grouped_files[category] %}
+          <div class="card file-card"
+               data-name="{{ f.name|lower }}"
+               data-suggest="{{ f.upload_suggestion.suggested_filename|lower }}"
+               data-status="{{ f.status_key }}"
+               data-category="{{ category }}">
+        <a href="{{ f.urls.detail }}" class="thumb-container">
+          <img class="thumb" src="{{ f.urls.thumb }}" loading="lazy" alt="">
+          <div class="thumb-overlay">
+            <div class="title">{{ f.name }}</div>
+            {% set key = f.status_key %}
+            {% if key == 'safe' %}
+              <span class="pill safe">Safe to upload</span>
+            {% elif key == 'duplicate' %}
+              <span class="pill duplicate">Duplicate</span>
+            {% elif key == 'nameexists' %}
+              <span class="pill nameexists">Name exists</span>
+            {% elif key == 'scaled' %}
+              <span class="pill scaled">Scaled variant</span>
+            {% elif key == 'uploaded' %}
+              <span class="pill uploaded">Uploaded</span>
+            {% elif key == 'checking' %}
+              <span class="pill checking">Checking...</span>
+            {% else %}
+              <span class="pill error">Error</span>
+            {% endif %}
+          </div>
+        </a>
         <div class="body">
-          <a class="title" href="{{ f.urls.detail }}">{{ f.name }}</a>
-
           <div class="row">
             <div class="muted">Size</div><div>{{ "%.2f"|format(f.size_mb) }} MB</div>
-            <div class="muted">Created</div><div>{{ f.created }}</div>
+            <div class="muted">Created</div><div>{{ f.created }} <span class="muted" style="font-size:11px;">({{ f.created_source }})</span></div>
             <div class="muted">Dimensions</div>
             <div>
               {% if f.dimensions.width and f.dimensions.height %}
                 {{ f.dimensions.width }} × {{ f.dimensions.height }} px
               {% else %}—{% endif %}
             </div>
-            <div class="muted">Commons</div>
-            <div>
-              {% set key = f.status_key %}
-              {% if key == 'safe' %}
-                <span class="pill safe">Safe to upload</span>
-              {% elif key == 'duplicate' %}
-                <span class="pill duplicate">Duplicate</span>
-              {% elif key == 'nameexists' %}
-                <span class="pill nameexists">Name exists</span>
-              {% elif key == 'scaled' %}
-                <span class="pill scaled">Scaled variant</span>
-              {% elif key == 'uploaded' %}
-                <span class="pill uploaded">Uploaded</span>
-              {% elif key == 'checking' %}
-                <span class="pill checking">Checking on Commons in progress</span>
-              {% else %}
-                <span class="pill error">Error</span>
-              {% endif %}
 
-              {% if f.remote_primary and key in ['duplicate','nameexists','scaled'] %}
-                <div class="muted" style="margin-top:4px">
-                  Commons file: <a class="chiplink" href="{{ f.remote_primary.url }}" target="_blank">{{ f.remote_primary.title }}</a>
-                </div>
-              {% endif %}
-            </div>
+            {% if f.remote_primary and f.status_key in ['duplicate','nameexists','scaled'] %}
+              <div class="muted">Commons file</div>
+              <div><a class="chiplink" href="{{ f.remote_primary.url }}" target="_blank">{{ f.remote_primary.title }}</a></div>
+            {% endif %}
 
+            {% set key = f.status_key %}
             {% if key == 'duplicate' or key == 'nameexists' or key == 'scaled' %}
               <div class="muted">Local filename</div><div>{{ f.name }}</div>
-              <div class="muted">Local subfolder</div><div>{{ f.upload_suggestion.category_slug }}</div>
+              <div class="muted">Local subfolder</div><div>{{ f.upload_suggestion.category_slug.replace('Category_', '') if f.upload_suggestion.category_slug else '—' }}</div>
+            {% elif key == 'safe' %}
+              <div class="muted">Suggested filename</div>
+              <div><input type="text" class="edit-filename" value="{{ f.upload_suggestion.suggested_filename }}" style="width:100%; padding:4px; border:1px solid var(--br); border-radius:4px;"></div>
+              <div class="muted">Suggested category</div>
+              <div class="autocomplete-container" style="width:100%;">
+                <input type="text" class="edit-category category-input" value="{{ f.upload_suggestion.category_slug or '' }}" data-original="{{ f.upload_suggestion.category_slug or '' }}" style="width:100%; padding:4px; border:1px solid var(--br); border-radius:4px;" autocomplete="off">
+                <div class="autocomplete-suggestions"></div>
+              </div>
             {% else %}
               <div class="muted">Suggested filename</div><div>{{ f.upload_suggestion.suggested_filename }}</div>
-              <div class="muted">Suggested category</div><div>{{ f.upload_suggestion.category_slug or '—' }}</div>
+              <div class="muted">Suggested category</div><div>{{ f.upload_suggestion.category_slug.replace('Category_', '') if f.upload_suggestion.category_slug else '—' }}</div>
             {% endif %}
           </div>
 
-          <div class="footer">
-            <div class="muted">SHA-1: {{ (f.sha1_local or '')[:10] ~ ('…' if f.sha1_local) }}</div>
+          <div class="footer" style="justify-content:flex-end;">
             <div class="links">
+              {% if upload_enabled and key == 'safe' %}
+              <button class="btn primary upload-btn" data-ref="{{ f.relative_path }}" onclick="uploadFile(this)">Upload</button>
+              {% endif %}
               <a class="btn" href="{{ f.urls.detail }}">More details</a>
             </div>
           </div>
-        </div>
-      </div>
+        </div><!-- end body -->
+        </div><!-- end card -->
+        {% endfor %}
+        </div><!-- end grid -->
+      </div><!-- end tab-content -->
       {% endfor %}
-    </div>
+    {% endif %}
   </main>
 
   <script>
-    const statusSel = document.getElementById('status');
+    // ============================================================================
+    // Category Management System
+    // ============================================================================
+    const CATEGORY_STORAGE_KEY = 'ftc_category_overrides';
+    const FILE_OVERRIDES_KEY = 'ftc_file_overrides';
+
+    // Load category overrides from localStorage
+    function getCategoryOverrides() {
+      const stored = localStorage.getItem(CATEGORY_STORAGE_KEY);
+      return stored ? JSON.parse(stored) : {};
+    }
+
+    // Save category overrides to localStorage
+    function saveCategoryOverrides(overrides) {
+      localStorage.setItem(CATEGORY_STORAGE_KEY, JSON.stringify(overrides));
+    }
+
+    // File-specific overrides (for syncing between index and detail pages)
+    function getFileOverrides() {
+      const stored = localStorage.getItem(FILE_OVERRIDES_KEY);
+      return stored ? JSON.parse(stored) : {};
+    }
+
+    function saveFileOverride(filePath, category) {
+      const overrides = getFileOverrides();
+      overrides[filePath] = category;
+      localStorage.setItem(FILE_OVERRIDES_KEY, JSON.stringify(overrides));
+    }
+
+    function removeFileOverride(filePath) {
+      const overrides = getFileOverrides();
+      delete overrides[filePath];
+      localStorage.setItem(FILE_OVERRIDES_KEY, JSON.stringify(overrides));
+    }
+
+    // Get or initialize original categories
+    function getOriginalCategories() {
+      // Always collect from current page (don't cache permanently)
+      const originals = {};
+      cards.forEach(card => {
+        const catInput = card.querySelector('.edit-category');
+        if (catInput) {
+          const originalCat = catInput.getAttribute('data-original');
+          if (originalCat && originalCat.trim()) {
+            originals[originalCat] = originalCat;
+          }
+        }
+      });
+      return originals;
+    }
+
+    // Apply category override to filename
+    function updateFilenameForCategory(card, newCategory) {
+      const filenameInput = card.querySelector('.edit-filename');
+      const categoryInput = card.querySelector('.edit-category');
+      if (!filenameInput || !categoryInput) return;
+
+      const originalCategory = categoryInput.getAttribute('data-original') || '';
+      const currentFilename = filenameInput.value;
+
+      // Try to replace old category in filename with new one
+      if (originalCategory && currentFilename.startsWith(originalCategory)) {
+        const rest = currentFilename.substring(originalCategory.length).trimStart();
+        filenameInput.value = newCategory ? `${newCategory} ${rest}` : rest;
+      } else if (newCategory) {
+        // Prepend new category
+        const basename = currentFilename.split('/').pop();
+        filenameInput.value = `${newCategory} ${basename}`;
+      }
+
+      categoryInput.value = newCategory;
+    }
+
+    // Apply overrides to all cards on page
+    function applyAllCategoryOverrides() {
+      const overrides = getCategoryOverrides();
+      cards.forEach(card => {
+        const categoryInput = card.querySelector('.edit-category');
+        if (!categoryInput) return;
+
+        const originalCat = categoryInput.getAttribute('data-original');
+        if (originalCat && overrides[originalCat]) {
+          updateFilenameForCategory(card, overrides[originalCat]);
+        }
+      });
+    }
+
+    // Initialize original categories in DOM
+    function initializeOriginalCategories() {
+      cards.forEach(card => {
+        const categoryInput = card.querySelector('.edit-category');
+        if (categoryInput && !categoryInput.getAttribute('data-original')) {
+          categoryInput.setAttribute('data-original', categoryInput.value);
+        }
+      });
+    }
+
     const qInput = document.getElementById('q');
     const cards = Array.from(document.querySelectorAll('.file-card'));
-    const visibleCount = document.getElementById('visibleCount');
-    const bulkBox = document.getElementById('bulkBox');
+
+    // Store current status filter per group
+    const groupStatusFilters = {};
 
     function applyFilters() {
       const q = qInput.value.trim().toLowerCase();
-      const st = statusSel.value;
 
-      let shown = 0;
-      cards.forEach(c => {
-        const name = c.dataset.name || '';
-        const suggest = c.dataset.suggest || '';
-        const status = c.dataset.status || 'checking';
+      // Apply filters to each group independently
+      document.querySelectorAll('.tab-content').forEach(tabContent => {
+        const category = tabContent.dataset.category;
+        const currentStatusFilter = groupStatusFilters[category] || 'all';
+        const cardsInGroup = tabContent.querySelectorAll('.file-card');
+        const visibleCountSpan = tabContent.querySelector('.visible-count');
 
-        const matchText = (!q) || name.includes(q) || suggest.includes(q);
-        const matchStatus = (st === 'all') || (status === st);
+        let shown = 0;
+        cardsInGroup.forEach(c => {
+          const name = c.dataset.name || '';
+          const suggest = c.dataset.suggest || '';
+          const status = c.dataset.status || 'checking';
 
-        const show = matchText && matchStatus;
-        c.style.display = show ? '' : 'none';
-        if (show) shown++;
+          const matchText = (!q) || name.includes(q) || suggest.includes(q);
+          const matchStatus = (currentStatusFilter === 'all') || (status === currentStatusFilter);
+
+          const show = matchText && matchStatus;
+          c.style.display = show ? '' : 'none';
+          if (show) shown++;
+        });
+
+        if (visibleCountSpan) {
+          visibleCountSpan.textContent = shown.toString();
+        }
+      });
+    }
+
+    function filterGroupByStatus(category, status) {
+      // Update stored filter for this group
+      groupStatusFilters[category] = status;
+
+      // Update active button styling
+      const filtersContainer = document.getElementById('filters-' + category);
+      filtersContainer.querySelectorAll('.status-filter').forEach(btn => {
+        if (btn.dataset.status === status) {
+          btn.classList.add('active');
+        } else {
+          btn.classList.remove('active');
+        }
       });
 
-      visibleCount.textContent = shown.toString();
-
-      // Show bulk upload only if Status filter == 'safe' (and there is at least one visible)
-      if (bulkBox) {
-        bulkBox.style.display = (statusSel.value === 'safe' && shown > 0) ? '' : 'none';
+      // Show/hide entire controls div (rename and bulk upload buttons) based on filter
+      const controlsDiv = document.getElementById('controls-' + category);
+      if (controlsDiv) {
+        // Only show controls when filter is 'safe'
+        if (status === 'safe') {
+          controlsDiv.style.display = '';
+        } else {
+          controlsDiv.style.display = 'none';
+        }
       }
+
+      // Apply filters
+      applyFilters();
     }
 
-    // Auto-refresh (every 8s) toggle with persistence
-    const autoChk = document.getElementById('autorefresh');
-    const AUTO_KEY = 'ftc_auto_refresh';
-    let _autoTimer = null;
 
-    function startAuto() {
-      if (_autoTimer) clearInterval(_autoTimer);
-      _autoTimer = setInterval(() => { window.location.reload(); }, 8000);
-    }
-    function stopAuto() {
-      if (_autoTimer) { clearInterval(_autoTimer); _autoTimer = null; }
-    }
-    function toggleAutoRefresh(el) {
-      if (el.checked) {
-        localStorage.setItem(AUTO_KEY, '1');
-        startAuto();
-      } else {
-        localStorage.removeItem(AUTO_KEY);
-        stopAuto();
+    // Upload individual file
+    async function uploadFile(btn) {
+      const card = btn.closest('.file-card');
+      const ref = btn.dataset.ref;
+      const filename = card.querySelector('.edit-filename').value.trim();
+      const category = card.querySelector('.edit-category').value.trim();
+      const originalCategory = card.querySelector('.edit-category').getAttribute('data-original');
+
+      if (!filename) {
+        alert('Filename cannot be empty');
+        return;
       }
-    }
-    // init state
-    if (localStorage.getItem(AUTO_KEY) === '1') {
-      autoChk.checked = true;
-      startAuto();
-    }
 
-    async function bulkUpload() {
-      if (!confirm('Upload all visible “Safe to upload” items now?')) return;
+      // Save file-specific override if category was changed from original
+      if (category !== originalCategory) {
+        saveFileOverride(ref, category);
+      }
+
+      btn.disabled = true;
+      btn.textContent = 'Uploading...';
+
       try {
-        const r = await fetch('{{ url_for("api_bulk_upload") }}', { method:'POST' });
+        const r = await fetch('{{ url_for("api_upload") }}', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ ref, suggested_filename: filename, category })
+        });
         const j = await r.json();
         if (!r.ok || !j.ok) {
-          alert('Bulk upload failed: ' + JSON.stringify(j.error || j));
+          alert('Upload failed: ' + (j.error || JSON.stringify(j)));
+          btn.disabled = false;
+          btn.textContent = 'Upload';
         } else {
-          alert(`Bulk upload done. Uploaded ${j.uploaded}/${j.requested}.`);
+          alert('Upload successful!');
           window.location.reload();
         }
       } catch (e) {
-        alert('Bulk upload error: ' + e);
+        alert('Upload error: ' + e);
+        btn.disabled = false;
+        btn.textContent = 'Upload';
       }
     }
 
-    // First layout
+    // Apply global category to all visible "Safe to upload" files
+    function applyGlobalCategory() {
+      const newCategory = document.getElementById('globalCategory').value.trim();
+      if (!newCategory) {
+        alert('Please enter a category');
+        return;
+      }
+
+      const safeCards = cards.filter(c => c.dataset.status === 'safe' && c.style.display !== 'none');
+      if (safeCards.length === 0) {
+        alert('No visible "Safe to upload" files found');
+        return;
+      }
+
+      if (!confirm(`Apply category "${newCategory}" to ${safeCards.length} file(s)?`)) return;
+
+      safeCards.forEach(c => {
+        const input = c.querySelector('.edit-category');
+        if (input) input.value = newCategory;
+      });
+
+      alert(`Category applied to ${safeCards.length} file(s)`);
+      document.getElementById('globalCategory').value = '';
+    }
+
+    async function bulkUploadGroup(categoryName) {
+      const tabContent = document.getElementById('tab-' + categoryName);
+      const safeCards = tabContent.querySelectorAll('.file-card[data-status="safe"]');
+
+      if (safeCards.length === 0) {
+        alert('No "Safe to upload" files in this group');
+        return;
+      }
+
+      if (!confirm(`Upload ${safeCards.length} "Safe to upload" file(s) from "${categoryName}" group?`)) return;
+
+      // TODO: Implement per-group bulk upload API call
+      alert(`Bulk upload for group "${categoryName}" - ${safeCards.length} files.\n\nNote: This feature needs backend API implementation.`);
+    }
+
+    // ============================================================================
+    // Tab Switching
+    // ============================================================================
+    function switchTab(categoryName) {
+      // Hide all tabs
+      document.querySelectorAll('.tab-content').forEach(tc => tc.classList.remove('active'));
+      document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+
+      // Show selected tab
+      document.getElementById('tab-' + categoryName).classList.add('active');
+      event.target.classList.add('active');
+    }
+
+    // ============================================================================
+    // Per-Group Category Renaming
+    // ============================================================================
+    function renameCategoryForGroup(originalCategory) {
+      const input = document.getElementById('rename-' + originalCategory);
+      const newCategory = input.value.trim();
+
+      if (!newCategory || newCategory === originalCategory) return;
+
+      // Find all cards in this category
+      const tabContent = document.getElementById('tab-' + originalCategory);
+      const cardsInGroup = tabContent.querySelectorAll('.file-card[data-category="' + originalCategory + '"]');
+
+      cardsInGroup.forEach(card => {
+        const filenameInput = card.querySelector('.edit-filename');
+        const categoryInput = card.querySelector('.edit-category');
+        const uploadBtn = card.querySelector('.upload-btn');
+
+        if (filenameInput && categoryInput) {
+          // Update category
+          categoryInput.value = newCategory;
+
+          // Update filename to use new category
+          const currentFilename = filenameInput.value;
+          if (originalCategory && currentFilename.startsWith(originalCategory)) {
+            const rest = currentFilename.substring(originalCategory.length).trimStart();
+            filenameInput.value = newCategory + ' ' + rest;
+          }
+
+          // Save file-specific override for cross-page syncing
+          if (uploadBtn) {
+            const ref = uploadBtn.dataset.ref;
+            if (ref) {
+              saveFileOverride(ref, newCategory);
+            }
+          }
+        }
+      });
+
+      // Save category-level override
+      const overrides = getCategoryOverrides();
+      overrides[originalCategory] = newCategory;
+      saveCategoryOverrides(overrides);
+    }
+
+    function revertCategoryForGroup(originalCategory) {
+      // Find all cards in this category
+      const tabContent = document.getElementById('tab-' + originalCategory);
+      const cardsInGroup = tabContent.querySelectorAll('.file-card[data-category="' + originalCategory + '"]');
+
+      cardsInGroup.forEach(card => {
+        const filenameInput = card.querySelector('.edit-filename');
+        const categoryInput = card.querySelector('.edit-category');
+        const uploadBtn = card.querySelector('.upload-btn');
+        const originalCat = categoryInput.getAttribute('data-original');
+
+        if (filenameInput && categoryInput && originalCat) {
+          const currentFilename = filenameInput.value;
+
+          // Find the base filename (everything after the category prefix)
+          let baseName = currentFilename;
+
+          // Try to strip the current category from the filename
+          if (categoryInput.value && currentFilename.startsWith(categoryInput.value)) {
+            baseName = currentFilename.substring(categoryInput.value.length).trimStart();
+          } else if (originalCategory && currentFilename.startsWith(originalCategory)) {
+            baseName = currentFilename.substring(originalCategory.length).trimStart();
+          }
+
+          // Reconstruct with original category
+          if (originalCat && baseName) {
+            filenameInput.value = originalCat + ' ' + baseName;
+          }
+
+          // Revert category
+          categoryInput.value = originalCat;
+
+          // Remove file-specific override for cross-page syncing
+          if (uploadBtn) {
+            const ref = uploadBtn.dataset.ref;
+            if (ref) {
+              removeFileOverride(ref);
+            }
+          }
+        }
+      });
+
+      // Remove category-level override
+      const overrides = getCategoryOverrides();
+      delete overrides[originalCategory];
+      saveCategoryOverrides(overrides);
+
+      // Reset the rename input
+      const input = document.getElementById('rename-' + originalCategory);
+      if (input) input.value = originalCategory;
+    }
+
+    // Apply file-specific overrides on page load
+    function applyFileOverrides() {
+      const fileOverrides = getFileOverrides();
+      cards.forEach(card => {
+        const uploadBtn = card.querySelector('.upload-btn');
+        const categoryInput = card.querySelector('.edit-category');
+
+        if (uploadBtn && categoryInput) {
+          const ref = uploadBtn.dataset.ref;
+          if (ref && fileOverrides[ref]) {
+            // Apply the file-specific category override
+            const newCategory = fileOverrides[ref];
+            categoryInput.value = newCategory;
+
+            // Update filename to match
+            const filenameInput = card.querySelector('.edit-filename');
+            if (filenameInput) {
+              const originalCategory = categoryInput.getAttribute('data-original');
+              const currentFilename = filenameInput.value;
+
+              if (originalCategory && currentFilename.startsWith(originalCategory)) {
+                const rest = currentFilename.substring(originalCategory.length).trimStart();
+                filenameInput.value = newCategory + ' ' + rest;
+              }
+            }
+          }
+        }
+      });
+    }
+
+    // ============================================================================
+    // Category Autocomplete
+    // ============================================================================
+    let autocompleteTimeout = null;
+
+    function setupCategoryAutocomplete() {
+      // Find all category input fields
+      const categoryInputs = document.querySelectorAll('.category-input');
+
+      categoryInputs.forEach(input => {
+        const container = input.closest('.autocomplete-container');
+        const suggestionsDiv = container.querySelector('.autocomplete-suggestions');
+
+        // Handle input changes
+        input.addEventListener('input', function() {
+          const query = this.value.trim();
+
+          // Clear previous timeout
+          if (autocompleteTimeout) {
+            clearTimeout(autocompleteTimeout);
+          }
+
+          // Hide suggestions if query is too short
+          if (query.length < 2) {
+            suggestionsDiv.classList.remove('active');
+            return;
+          }
+
+          // Debounce API calls
+          autocompleteTimeout = setTimeout(async () => {
+            try {
+              const response = await fetch(`{{ url_for('api_search_categories') }}?q=${encodeURIComponent(query)}`);
+              const data = await response.json();
+
+              // Clear previous suggestions
+              suggestionsDiv.innerHTML = '';
+
+              if (data.suggestions && data.suggestions.length > 0) {
+                data.suggestions.forEach(suggestion => {
+                  const div = document.createElement('div');
+                  div.className = 'autocomplete-suggestion';
+                  div.textContent = suggestion;
+                  div.addEventListener('click', function() {
+                    input.value = suggestion;
+                    suggestionsDiv.classList.remove('active');
+                    // Trigger input event to update any dependent logic
+                    input.dispatchEvent(new Event('input', { bubbles: true }));
+                  });
+                  suggestionsDiv.appendChild(div);
+                });
+                suggestionsDiv.classList.add('active');
+              } else {
+                suggestionsDiv.classList.remove('active');
+              }
+            } catch (e) {
+              console.error('Category autocomplete error:', e);
+              suggestionsDiv.classList.remove('active');
+            }
+          }, 300); // Wait 300ms after user stops typing
+        });
+
+        // Close suggestions when clicking outside
+        document.addEventListener('click', function(e) {
+          if (!container.contains(e.target)) {
+            suggestionsDiv.classList.remove('active');
+          }
+        });
+
+        // Handle keyboard navigation
+        input.addEventListener('keydown', function(e) {
+          const suggestions = suggestionsDiv.querySelectorAll('.autocomplete-suggestion');
+          const activeSuggestion = suggestionsDiv.querySelector('.autocomplete-suggestion:hover');
+
+          if (e.key === 'Escape') {
+            suggestionsDiv.classList.remove('active');
+          } else if (e.key === 'ArrowDown' && suggestions.length > 0) {
+            e.preventDefault();
+            if (!activeSuggestion) {
+              suggestions[0].style.background = 'var(--bg)';
+            }
+          } else if (e.key === 'Enter' && activeSuggestion) {
+            e.preventDefault();
+            activeSuggestion.click();
+          }
+        });
+      });
+    }
+
+    // ============================================================================
+    // Initialization
+    // ============================================================================
+    // Initialize on page load
+    initializeOriginalCategories();
+    applyAllCategoryOverrides();
+    applyFileOverrides();
     applyFilters();
+    setupCategoryAutocomplete();
   </script>
 </body>
 </html>
